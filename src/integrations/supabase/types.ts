@@ -14,7 +14,108 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      predictions: {
+        Row: {
+          confidence: number
+          created_at: string
+          current_price_at_prediction: number
+          entry_price: number
+          expires_at: string
+          id: string
+          outcome: string | null
+          outcome_at: string | null
+          outcome_price: number | null
+          patterns_detected: Json | null
+          reasoning: string | null
+          sentiment_score: number | null
+          signal_type: string
+          stop_loss: number | null
+          take_profit_1: number | null
+          take_profit_2: number | null
+          technical_indicators: Json | null
+          trend_direction: string
+          trend_strength: number | null
+        }
+        Insert: {
+          confidence: number
+          created_at?: string
+          current_price_at_prediction: number
+          entry_price: number
+          expires_at?: string
+          id?: string
+          outcome?: string | null
+          outcome_at?: string | null
+          outcome_price?: number | null
+          patterns_detected?: Json | null
+          reasoning?: string | null
+          sentiment_score?: number | null
+          signal_type: string
+          stop_loss?: number | null
+          take_profit_1?: number | null
+          take_profit_2?: number | null
+          technical_indicators?: Json | null
+          trend_direction: string
+          trend_strength?: number | null
+        }
+        Update: {
+          confidence?: number
+          created_at?: string
+          current_price_at_prediction?: number
+          entry_price?: number
+          expires_at?: string
+          id?: string
+          outcome?: string | null
+          outcome_at?: string | null
+          outcome_price?: number | null
+          patterns_detected?: Json | null
+          reasoning?: string | null
+          sentiment_score?: number | null
+          signal_type?: string
+          stop_loss?: number | null
+          take_profit_1?: number | null
+          take_profit_2?: number | null
+          technical_indicators?: Json | null
+          trend_direction?: string
+          trend_strength?: number | null
+        }
+        Relationships: []
+      }
+      price_history: {
+        Row: {
+          close: number
+          high: number
+          id: string
+          low: number
+          open: number
+          symbol: string
+          timeframe: string
+          timestamp: string
+          volume: number | null
+        }
+        Insert: {
+          close: number
+          high: number
+          id?: string
+          low: number
+          open: number
+          symbol?: string
+          timeframe?: string
+          timestamp: string
+          volume?: number | null
+        }
+        Update: {
+          close?: number
+          high?: number
+          id?: string
+          low?: number
+          open?: number
+          symbol?: string
+          timeframe?: string
+          timestamp?: string
+          volume?: number | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
