@@ -6,16 +6,49 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Fetch current EUR/USD price from Twelve Data
+async function fetchCurrentPrice(): Promise<number> {
+  const apiKey = Deno.env.get('TWELVE_DATA_API_KEY');
+  if (!apiKey) {
+    throw new Error('TWELVE_DATA_API_KEY not configured');
+  }
+
+  const response = await fetch(
+    `https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${apiKey}`
+  );
+  
+  if (!response.ok) {
+    throw new Error(`Failed to fetch price: ${response.statusText}`);
+  }
+  
+  const data = await response.json();
+  if (data.code) {
+    throw new Error(`Twelve Data error: ${data.message}`);
+  }
+  
+  return parseFloat(data.price);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { currentPrice } = await req.json();
-
+    // Try to get price from request body, otherwise fetch it
+    let currentPrice: number;
+    
+    try {
+      const body = await req.json();
+      currentPrice = body.currentPrice;
+    } catch {
+      // No body or invalid JSON - fetch price ourselves
+      currentPrice = 0;
+    }
+    
     if (!currentPrice || typeof currentPrice !== 'number') {
-      throw new Error('Current price is required');
+      console.log('No price provided, fetching from Twelve Data...');
+      currentPrice = await fetchCurrentPrice();
     }
 
     console.log(`Evaluating predictions against current price: ${currentPrice}`);
