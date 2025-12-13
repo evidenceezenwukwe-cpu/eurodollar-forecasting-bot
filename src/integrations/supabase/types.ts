@@ -14,6 +14,47 @@ export type Database = {
   }
   public: {
     Tables: {
+      prediction_learnings: {
+        Row: {
+          created_at: string
+          failure_reason: string | null
+          id: string
+          lesson_extracted: string
+          market_conditions: Json | null
+          pattern_context: Json | null
+          prediction_id: string | null
+          success_factors: string | null
+        }
+        Insert: {
+          created_at?: string
+          failure_reason?: string | null
+          id?: string
+          lesson_extracted: string
+          market_conditions?: Json | null
+          pattern_context?: Json | null
+          prediction_id?: string | null
+          success_factors?: string | null
+        }
+        Update: {
+          created_at?: string
+          failure_reason?: string | null
+          id?: string
+          lesson_extracted?: string
+          market_conditions?: Json | null
+          pattern_context?: Json | null
+          prediction_id?: string | null
+          success_factors?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prediction_learnings_prediction_id_fkey"
+            columns: ["prediction_id"]
+            isOneToOne: false
+            referencedRelation: "predictions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       predictions: {
         Row: {
           confidence: number
