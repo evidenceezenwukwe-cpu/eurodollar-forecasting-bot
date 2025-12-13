@@ -8,6 +8,7 @@ import { SignalCard } from '@/components/trading/SignalCard';
 import TechnicalIndicators from '@/components/trading/TechnicalIndicators';
 import { SentimentPanel } from '@/components/trading/SentimentPanel';
 import { PredictionHistory } from '@/components/trading/PredictionHistory';
+import { LearningsPanel } from '@/components/trading/LearningsPanel';
 import { useForexData } from '@/hooks/useForexData';
 import { usePrediction } from '@/hooks/usePrediction';
 import { usePredictionHistory } from '@/hooks/usePredictionHistory';
@@ -109,12 +110,17 @@ const Index = () => {
             </div>
           </div>
 
-          {/* Prediction History */}
-          <div className="mt-8">
-            <PredictionHistory 
-              predictions={predictions}
-              isLoading={historyLoading}
-            />
+          {/* Prediction History & Learnings */}
+          <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              <PredictionHistory 
+                predictions={predictions}
+                isLoading={historyLoading}
+              />
+            </div>
+            <div className="lg:col-span-1">
+              <LearningsPanel />
+            </div>
           </div>
         </main>
       </div>
