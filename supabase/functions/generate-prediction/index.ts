@@ -371,55 +371,81 @@ function calculateIndicators(candles: Candle[]): TechnicalIndicators {
   };
 }
 
-// NEW: Signal confirmation filters
+// NEW: Signal confirmation filters - relaxed for more actionable signals
 function getSignalConfirmation(indicators: TechnicalIndicators, patterns: string[], currentPrice: number): SignalConfirmation {
   const buyReasons: string[] = [];
   const sellReasons: string[] = [];
   const conflicts: string[] = [];
   
-  // RSI analysis
+  // RSI analysis - only add to sides when there's clear signal
   if (indicators.rsi < 30) {
-    buyReasons.push('RSI oversold (<30)');
+    buyReasons.push('RSI oversold (<30) - strong buy signal');
+  } else if (indicators.rsi < 40) {
+    buyReasons.push('RSI approaching oversold (30-40)');
   } else if (indicators.rsi > 70) {
-    sellReasons.push('RSI overbought (>70)');
-  } else if (indicators.rsi >= 40 && indicators.rsi <= 60) {
-    buyReasons.push('RSI neutral zone - safe entry');
-    sellReasons.push('RSI neutral zone - safe entry');
+    sellReasons.push('RSI overbought (>70) - strong sell signal');
+  } else if (indicators.rsi > 60) {
+    sellReasons.push('RSI approaching overbought (60-70)');
+  }
+  // RSI 40-60 is neutral - don't add to either side
+  
+  // MACD analysis - more granular
+  if (indicators.macd.histogram > 0) {
+    if (indicators.macd.value > indicators.macd.signal) {
+      buyReasons.push('MACD bullish (histogram positive, above signal)');
+    } else {
+      buyReasons.push('MACD histogram positive');
+    }
+  } else if (indicators.macd.histogram < 0) {
+    if (indicators.macd.value < indicators.macd.signal) {
+      sellReasons.push('MACD bearish (histogram negative, below signal)');
+    } else {
+      sellReasons.push('MACD histogram negative');
+    }
   }
   
-  // MACD analysis
-  if (indicators.macd.histogram > 0 && indicators.macd.value > indicators.macd.signal) {
-    buyReasons.push('MACD bullish (histogram positive, above signal)');
-  } else if (indicators.macd.histogram < 0 && indicators.macd.value < indicators.macd.signal) {
-    sellReasons.push('MACD bearish (histogram negative, below signal)');
+  // MACD crossover detection - only flag as conflict if very close
+  if (Math.abs(indicators.macd.histogram) < 0.00002) {
+    conflicts.push('MACD near crossover');
   }
   
-  // MACD crossover detection
-  if (Math.abs(indicators.macd.histogram) < 0.00005) {
-    conflicts.push('MACD near crossover - wait for confirmation');
-  }
+  // EMA alignment - more flexible
+  const ema21AboveEma50 = indicators.ema21 > indicators.ema50;
+  const priceAboveEma21 = currentPrice > indicators.ema21;
+  const priceAboveEma50 = currentPrice > indicators.ema50;
   
-  // EMA alignment
-  if (currentPrice > indicators.ema21 && indicators.ema21 > indicators.ema50) {
-    buyReasons.push('Price above EMA21 > EMA50 (bullish alignment)');
-  } else if (currentPrice < indicators.ema21 && indicators.ema21 < indicators.ema50) {
-    sellReasons.push('Price below EMA21 < EMA50 (bearish alignment)');
-  } else {
-    conflicts.push('EMA alignment mixed - trend unclear');
+  if (priceAboveEma21 && priceAboveEma50 && ema21AboveEma50) {
+    buyReasons.push('Strong bullish EMA alignment (price > EMA21 > EMA50)');
+  } else if (priceAboveEma21 && priceAboveEma50) {
+    buyReasons.push('Price above both EMAs');
+  } else if (!priceAboveEma21 && !priceAboveEma50 && !ema21AboveEma50) {
+    sellReasons.push('Strong bearish EMA alignment (price < EMA21 < EMA50)');
+  } else if (!priceAboveEma21 && !priceAboveEma50) {
+    sellReasons.push('Price below both EMAs');
   }
+  // Mixed EMA is no longer a conflict - just don't add signal
   
   // Bollinger Bands
+  const bbMiddle = indicators.bollingerBands.middle;
   if (currentPrice < indicators.bollingerBands.lower) {
     buyReasons.push('Price below lower Bollinger Band (oversold)');
+  } else if (currentPrice < bbMiddle && currentPrice > indicators.bollingerBands.lower) {
+    buyReasons.push('Price in lower Bollinger Band zone');
   } else if (currentPrice > indicators.bollingerBands.upper) {
     sellReasons.push('Price above upper Bollinger Band (overbought)');
+  } else if (currentPrice > bbMiddle && currentPrice < indicators.bollingerBands.upper) {
+    sellReasons.push('Price in upper Bollinger Band zone');
   }
   
-  // Stochastic
+  // Stochastic - more granular
   if (indicators.stochastic.k < 20 && indicators.stochastic.d < 20) {
-    buyReasons.push('Stochastic oversold (<20)');
+    buyReasons.push('Stochastic deeply oversold (<20)');
+  } else if (indicators.stochastic.k < 30) {
+    buyReasons.push('Stochastic approaching oversold');
   } else if (indicators.stochastic.k > 80 && indicators.stochastic.d > 80) {
-    sellReasons.push('Stochastic overbought (>80)');
+    sellReasons.push('Stochastic deeply overbought (>80)');
+  } else if (indicators.stochastic.k > 70) {
+    sellReasons.push('Stochastic approaching overbought');
   }
   
   // Pattern analysis
@@ -431,20 +457,27 @@ function getSignalConfirmation(indicators: TechnicalIndicators, patterns: string
   );
   
   if (bullishPatterns.length > 0) {
-    buyReasons.push(`Bullish patterns: ${bullishPatterns.length}`);
+    buyReasons.push(`Bullish patterns detected: ${bullishPatterns.length}`);
   }
   if (bearishPatterns.length > 0) {
-    sellReasons.push(`Bearish patterns: ${bearishPatterns.length}`);
+    sellReasons.push(`Bearish patterns detected: ${bearishPatterns.length}`);
   }
   
-  // Check for conflicting patterns
-  if (bullishPatterns.length > 0 && bearishPatterns.length > 0) {
-    conflicts.push('Mixed bullish and bearish patterns detected');
+  // Only flag as conflict if both pattern types are strong (2+ each)
+  if (bullishPatterns.length >= 2 && bearishPatterns.length >= 2) {
+    conflicts.push('Strong conflicting patterns detected');
   }
   
-  // Determine if we can trade
-  const canBuy = buyReasons.length >= 3 && sellReasons.length <= 1 && conflicts.length <= 1;
-  const canSell = sellReasons.length >= 3 && buyReasons.length <= 1 && conflicts.length <= 1;
+  // RELAXED: Determine if we can trade - net advantage approach
+  // Need 2+ reasons AND net advantage of at least 1 over opposing side
+  const netBuyAdvantage = buyReasons.length - sellReasons.length;
+  const netSellAdvantage = sellReasons.length - buyReasons.length;
+  
+  const canBuy = buyReasons.length >= 2 && netBuyAdvantage >= 1 && conflicts.length <= 2;
+  const canSell = sellReasons.length >= 2 && netSellAdvantage >= 1 && conflicts.length <= 2;
+  
+  console.log(`Signal confirmation: buy=${buyReasons.length} (net +${netBuyAdvantage}), sell=${sellReasons.length} (net +${netSellAdvantage}), conflicts=${conflicts.length}`);
+  console.log(`Can trade: BUY=${canBuy}, SELL=${canSell}`);
   
   return { canBuy, canSell, buyReasons, sellReasons, conflicts };
 }
@@ -595,12 +628,14 @@ SIGNAL CONFIRMATION ANALYSIS:
 - Can generate BUY: ${signalConfirmation.canBuy ? 'YES' : 'NO'}
 - Can generate SELL: ${signalConfirmation.canSell ? 'YES' : 'NO'}
 
-BUY reasons (${signalConfirmation.buyReasons.length}): ${signalConfirmation.buyReasons.join(', ') || 'None'}
-SELL reasons (${signalConfirmation.sellReasons.length}): ${signalConfirmation.sellReasons.join(', ') || 'None'}
+BUY SIGNALS (${signalConfirmation.buyReasons.length}): ${signalConfirmation.buyReasons.join(', ') || 'None'}
+SELL SIGNALS (${signalConfirmation.sellReasons.length}): ${signalConfirmation.sellReasons.join(', ') || 'None'}
 CONFLICTS (${signalConfirmation.conflicts.length}): ${signalConfirmation.conflicts.join(', ') || 'None'}
 
-${!signalConfirmation.canBuy && !signalConfirmation.canSell ? '⚠️ INSUFFICIENT CONFIRMATION - Default to HOLD signal' : ''}
-${signalConfirmation.conflicts.length >= 2 ? '⚠️ TOO MANY CONFLICTS - Default to HOLD signal' : ''}`;
+SIGNAL GUIDANCE (for your consideration):
+- Can generate BUY: ${signalConfirmation.canBuy ? 'YES - conditions favor BUY' : 'NO - but you may still suggest BUY with lower confidence if you see opportunity'}
+- Can generate SELL: ${signalConfirmation.canSell ? 'YES - conditions favor SELL' : 'NO - but you may still suggest SELL with lower confidence if you see opportunity'}
+${signalConfirmation.conflicts.length >= 3 ? '⚠️ MANY CONFLICTS - Consider HOLD unless you see clear opportunity' : ''}`;
 
     // Calculate ATR-based levels for reference
     const buyLevels = calculateATRBasedLevels(currentPrice, indicators.atr, 'BUY', timeframe);
@@ -643,15 +678,16 @@ ATR-BASED LEVELS (MUST USE THESE):
 If BUY: SL=${buyLevels.stopLoss.toFixed(5)}, TP1=${buyLevels.takeProfit1.toFixed(5)}, TP2=${buyLevels.takeProfit2.toFixed(5)}
 If SELL: SL=${sellLevels.stopLoss.toFixed(5)}, TP1=${sellLevels.takeProfit1.toFixed(5)}, TP2=${sellLevels.takeProfit2.toFixed(5)}
 
-CRITICAL RULES - FOLLOW THESE EXACTLY:
-1. DO NOT generate BUY if RSI > 65 or if price is near resistance
-2. DO NOT generate SELL if RSI < 35 or if price is near support
-3. DO NOT trade if there are 2+ conflicting signals
-4. DO NOT trade against the trend (if EMA21 > EMA50, prefer BUY; if EMA21 < EMA50, prefer SELL)
-5. If win rate < 40%, be EXTRA conservative - prefer HOLD
-6. ALWAYS use the ATR-based SL/TP levels provided above
-7. Minimum confidence for BUY/SELL should be 70%. If not confident, use HOLD.
-8. If "Can generate BUY" and "Can generate SELL" are both NO, you MUST generate HOLD
+TRADING GUIDELINES (use your judgment):
+1. PREFER BUY when: RSI < 50, price near support, MACD bullish, EMA alignment bullish
+2. PREFER SELL when: RSI > 50, price near resistance, MACD bearish, EMA alignment bearish  
+3. PREFER HOLD when: Too many conflicts (3+), or no clear directional bias
+4. ALWAYS use the ATR-based SL/TP levels provided above
+5. Confidence levels:
+   - 70-100%: Strong conviction, multiple confirming indicators
+   - 55-69%: Moderate conviction, some confirmation
+   - Below 55%: Use HOLD instead
+6. The "Signal Guidance" above is a SUGGESTION, not a hard rule. If you see a clear opportunity, you may generate BUY/SELL even if the guidance says NO.
 
 RECENT PRICE ACTION:
 - 10 candles ago: ${candles[candles.length - 10]?.close?.toFixed(5) || 'N/A'}
@@ -669,16 +705,17 @@ RECENT PRICE ACTION:
         messages: [
           { 
             role: "system", 
-            content: `You are a CONSERVATIVE forex trading analyst. Your top priority is CAPITAL PRESERVATION. 
-            
-You follow these rules strictly:
-- Only generate BUY/SELL when you have 3+ confirming indicators
-- When in doubt, ALWAYS choose HOLD
-- Use the ATR-based stop loss levels provided - never set tighter stops
-- Risk/Reward ratio must be at least 1:1.5
-- If the signal confirmation says you cannot trade, generate HOLD with confidence 50-60%
+            content: `You are a skilled forex trading analyst who balances opportunity with risk management.
 
-Your signals must be backed by clear technical evidence. Explain your reasoning.` 
+Your approach:
+- Generate actionable BUY/SELL signals when you see reasonable opportunity (2+ confirming indicators)
+- Use HOLD only when the market is truly unclear or there are too many conflicts
+- The signal guidance in the prompt is a suggestion - use your analysis to make the final call
+- Always use ATR-based stop loss levels provided - never set tighter stops
+- Risk/Reward ratio should be at least 1:1.5
+- Confidence of 55%+ is acceptable for BUY/SELL, but 70%+ is preferred
+
+Be willing to take calculated risks when the technical picture supports it. Explain your reasoning clearly.`
           },
           { role: "user", content: analysisPrompt }
         ],
@@ -692,7 +729,7 @@ Your signals must be backed by clear technical evidence. Explain your reasoning.
                 type: "object",
                 properties: {
                   signal_type: { type: "string", enum: ["BUY", "SELL", "HOLD"], description: "The trading signal - use HOLD if unsure" },
-                  confidence: { type: "number", description: "Confidence level 0-100. Must be 70+ for BUY/SELL, otherwise HOLD" },
+                  confidence: { type: "number", description: "Confidence level 0-100. 55%+ acceptable for BUY/SELL, 70%+ preferred" },
                   entry_price: { type: "number", description: "Recommended entry price (current price)" },
                   take_profit_1: { type: "number", description: "First take profit target - use ATR-based level" },
                   take_profit_2: { type: "number", description: "Second take profit target - use ATR-based level" },
@@ -741,11 +778,12 @@ Your signals must be backed by clear technical evidence. Explain your reasoning.
     let signal = JSON.parse(toolCall.function.arguments);
     console.log("Parsed signal:", signal);
 
-    // Post-processing: enforce confidence threshold
-    if (signal.signal_type !== 'HOLD' && signal.confidence < 70) {
+    // Post-processing: enforce RELAXED confidence threshold (55% minimum)
+    if (signal.signal_type !== 'HOLD' && signal.confidence < 55) {
       console.log(`Confidence ${signal.confidence}% too low for ${signal.signal_type}, converting to HOLD`);
+      const originalSignal = signal.signal_type;
       signal.signal_type = 'HOLD';
-      signal.reasoning = `Original signal was ${signal.signal_type} but confidence (${signal.confidence}%) was below 70% threshold. ${signal.reasoning}`;
+      signal.reasoning = `Original signal was ${originalSignal} but confidence (${signal.confidence}%) was below 55% minimum threshold. ${signal.reasoning}`;
     }
 
     // Enforce signal confirmation rules
