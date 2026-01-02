@@ -531,25 +531,35 @@ serve(async (req) => {
       );
     }
 
-    // Check for duplicate active opportunity
-    const { data: existingOpps } = await supabase
+    // Enhanced duplicate check - look at recent opportunities (4 hours) regardless of status
+    // and require significant price movement before creating new opportunity
+    const { data: recentOpps } = await supabase
       .from('trading_opportunities')
-      .select('id, signal_type, created_at')
-      .eq('status', 'ACTIVE')
+      .select('id, signal_type, entry_price, created_at, status')
       .eq('signal_type', analysis.signal)
-      .gte('created_at', new Date(Date.now() - 30 * 60 * 1000).toISOString()); // Last 30 mins
+      .gte('created_at', new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString()); // Last 4 hours
 
-    if (existingOpps && existingOpps.length > 0) {
-      console.log("Similar opportunity already exists from recent scan");
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          message: "Similar opportunity already active", 
-          scanned: true,
-          existingOpportunity: existingOpps[0].id
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (recentOpps && recentOpps.length > 0) {
+      // Check if price has moved significantly (at least 15 pips)
+      const mostRecent = recentOpps[0];
+      const priceDiff = Math.abs(currentPrice - mostRecent.entry_price);
+      const pipsDiff = priceDiff * 10000; // Convert to pips for EUR/USD
+      
+      if (pipsDiff < 15) {
+        console.log(`Similar opportunity exists (${pipsDiff.toFixed(1)} pips difference, need 15+)`);
+        return new Response(
+          JSON.stringify({ 
+            success: true, 
+            message: `Similar ${analysis.signal} opportunity exists from ${mostRecent.created_at} (only ${pipsDiff.toFixed(1)} pips apart)`, 
+            scanned: true,
+            existingOpportunity: mostRecent.id,
+            priceDifference: pipsDiff.toFixed(1)
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      console.log(`Price moved ${pipsDiff.toFixed(1)} pips since last ${analysis.signal} signal - creating new opportunity`);
     }
 
     // Calculate entry levels

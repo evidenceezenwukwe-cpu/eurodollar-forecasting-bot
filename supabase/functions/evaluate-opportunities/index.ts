@@ -28,6 +28,19 @@ interface PricePoint {
   close: number;
 }
 
+interface LearningResult {
+  lesson: string;
+  successFactors: string | null;
+  failureReason: string | null;
+  confidenceAdjustment: string | null;
+}
+
+// Create a hash for pattern context to detect duplicates
+function createPatternHash(patterns: string[], signalType: string): string {
+  const sortedPatterns = [...patterns].sort().join('|');
+  return `${signalType}:${sortedPatterns}`;
+}
+
 // Determine outcome by checking if SL or TP was hit
 function evaluateOutcome(
   opportunity: Opportunity,
@@ -66,34 +79,59 @@ function evaluateOutcome(
   };
 }
 
-// Generate AI learning from the outcome
+// Generate AI learning from the outcome with improved prompt
 async function generateLearning(
   opportunity: Opportunity,
   outcome: 'WIN' | 'LOSS' | 'EXPIRED',
   outcomePrice: number,
-  lovableApiKey: string
-): Promise<{ lesson: string; successFactors: string | null; failureReason: string | null }> {
-  const prompt = `Analyze this forex trading opportunity and its outcome to extract learning insights.
+  lovableApiKey: string,
+  existingLearningsCount: number
+): Promise<LearningResult> {
+  const patterns = opportunity.patterns_detected || [];
+  const indicators = opportunity.technical_indicators || {};
+  const pipsMove = Math.abs(outcomePrice - opportunity.entry_price) * 10000;
+  
+  // Improved, more specific prompt
+  const prompt = `You are analyzing a completed EUR/USD forex trade to extract a UNIQUE, SPECIFIC learning.
 
-OPPORTUNITY DETAILS:
+TRADE DETAILS:
 - Signal: ${opportunity.signal_type} at ${opportunity.entry_price.toFixed(5)}
 - Stop Loss: ${opportunity.stop_loss?.toFixed(5) || 'Not set'}
 - Take Profit: ${opportunity.take_profit_1?.toFixed(5) || 'Not set'}
 - Confidence: ${opportunity.confidence.toFixed(0)}%
-- Patterns Detected: ${JSON.stringify(opportunity.patterns_detected || [])}
-- Technical Indicators: RSI=${opportunity.technical_indicators?.rsi?.toFixed(1) || 'N/A'}, MACD Histogram=${opportunity.technical_indicators?.macd?.histogram?.toFixed(5) || 'N/A'}
-
-OUTCOME:
-- Result: ${outcome}
+- Result: ${outcome} (${outcome === 'WIN' ? 'TP hit' : outcome === 'LOSS' ? 'SL hit' : 'expired without hitting levels'})
 - Outcome Price: ${outcomePrice.toFixed(5)}
-- Original Reasoning: ${opportunity.reasoning || 'None provided'}
+- Price Movement: ${pipsMove.toFixed(1)} pips ${outcomePrice > opportunity.entry_price ? 'up' : 'down'}
 
-Based on this ${outcome === 'WIN' ? 'successful' : 'unsuccessful'} trade, provide:
-1. A key lesson learned (1-2 sentences)
-2. ${outcome === 'WIN' ? 'What factors contributed to success' : 'What went wrong and why'}
-3. How to improve future signals with similar setups
+PATTERNS DETECTED: ${patterns.length > 0 ? patterns.join(', ') : 'None'}
 
-Keep each response under 100 words. Be specific and actionable.`;
+TECHNICAL SNAPSHOT AT ENTRY:
+- RSI: ${indicators?.rsi?.toFixed(1) || 'N/A'}
+- MACD Histogram: ${indicators?.macd?.histogram?.toFixed(5) || 'N/A'}
+- Stochastic %K: ${indicators?.stochastic?.k?.toFixed(1) || 'N/A'}
+- ATR: ${indicators?.atr?.toFixed(5) || 'N/A'}
+
+IMPORTANT CONTEXT:
+- There are already ${existingLearningsCount} learnings in the database
+- We need a NEW, SPECIFIC insight - NOT generic advice like "downtrend = good for SELL"
+- Focus on the SPECIFIC numbers and conditions of THIS trade
+
+Respond in EXACTLY this JSON format (no markdown, just raw JSON):
+{
+  "unique_observation": "One specific thing noticed in THIS trade only (max 25 words)",
+  "actionable_rule": "If [specific condition with numbers], then [specific action] (max 30 words)",
+  "confidence_adjustment": "Adjust confidence by X% for similar setups because [specific reason]"
+}
+
+Examples of GOOD responses:
+- "RSI at 28.3 combined with MACD histogram -0.00045 led to 15 pip reversal within 2 hours"
+- "If RSI < 30 AND Stochastic %K < 20, increase confidence by +8% for BUY signals"
+
+Examples of BAD responses (too generic):
+- "Downtrend patterns work well for SELL signals"
+- "Technical indicators aligned correctly"
+
+DO NOT give generic advice. Reference THIS trade's specific numbers.`;
 
   try {
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -105,7 +143,10 @@ Keep each response under 100 words. Be specific and actionable.`;
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: "You are a forex trading analyst. Provide concise, actionable insights from trade outcomes." },
+          { 
+            role: "system", 
+            content: "You are a forex trading analyst. Provide concise, specific, data-driven insights. Always respond in valid JSON format only - no markdown code blocks, no extra text." 
+          },
           { role: "user", content: prompt }
         ],
       }),
@@ -113,33 +154,74 @@ Keep each response under 100 words. Be specific and actionable.`;
 
     if (!response.ok) {
       console.error("AI API error:", response.status);
-      return {
-        lesson: `${outcome} trade - ${opportunity.signal_type} signal at ${opportunity.confidence.toFixed(0)}% confidence.`,
-        successFactors: outcome === 'WIN' ? 'Technical indicators aligned correctly' : null,
-        failureReason: outcome !== 'WIN' ? 'Market moved against the position' : null,
-      };
+      return createFallbackLearning(opportunity, outcome, outcomePrice, pipsMove);
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
     
-    // Parse the AI response
-    const lines = content.split('\n').filter((l: string) => l.trim());
-    const lesson = lines[0] || `${outcome} trade analyzed`;
-    
-    return {
-      lesson: lesson.slice(0, 500),
-      successFactors: outcome === 'WIN' ? (lines.slice(1).join(' ').slice(0, 500) || 'Indicators aligned correctly') : null,
-      failureReason: outcome !== 'WIN' ? (lines.slice(1).join(' ').slice(0, 500) || 'Market conditions changed') : null,
-    };
+    // Try to parse as JSON first
+    try {
+      // Clean the content - remove markdown code blocks if present
+      let cleanContent = content.trim();
+      if (cleanContent.startsWith('```json')) {
+        cleanContent = cleanContent.slice(7);
+      } else if (cleanContent.startsWith('```')) {
+        cleanContent = cleanContent.slice(3);
+      }
+      if (cleanContent.endsWith('```')) {
+        cleanContent = cleanContent.slice(0, -3);
+      }
+      cleanContent = cleanContent.trim();
+      
+      const parsed = JSON.parse(cleanContent);
+      
+      return {
+        lesson: parsed.unique_observation || `${outcome}: ${opportunity.signal_type} moved ${pipsMove.toFixed(1)} pips`,
+        successFactors: outcome === 'WIN' ? parsed.actionable_rule : null,
+        failureReason: outcome !== 'WIN' ? parsed.actionable_rule : null,
+        confidenceAdjustment: parsed.confidence_adjustment || null
+      };
+    } catch (parseError) {
+      console.log("Failed to parse JSON, using text extraction:", parseError);
+      
+      // Fallback: extract meaningful content from unstructured response
+      const lines = content.split('\n').filter((l: string) => l.trim() && !l.includes('{') && !l.includes('}'));
+      const meaningfulLine = lines.find((l: string) => l.length > 20) || lines[0] || '';
+      
+      return {
+        lesson: meaningfulLine.slice(0, 500) || `${outcome}: ${opportunity.signal_type} at RSI ${indicators?.rsi?.toFixed(1) || 'N/A'} moved ${pipsMove.toFixed(1)} pips`,
+        successFactors: outcome === 'WIN' ? `Trade succeeded with ${patterns.join(', ') || 'technical'} setup` : null,
+        failureReason: outcome !== 'WIN' ? `Trade failed despite ${opportunity.confidence.toFixed(0)}% confidence` : null,
+        confidenceAdjustment: null
+      };
+    }
   } catch (error) {
     console.error("Learning generation error:", error);
-    return {
-      lesson: `${outcome}: ${opportunity.signal_type} at ${opportunity.entry_price.toFixed(5)}`,
-      successFactors: outcome === 'WIN' ? 'Signal executed as planned' : null,
-      failureReason: outcome !== 'WIN' ? 'Trade did not reach target' : null,
-    };
+    return createFallbackLearning(opportunity, outcome, outcomePrice, pipsMove);
   }
+}
+
+// Create a specific fallback learning
+function createFallbackLearning(
+  opportunity: Opportunity,
+  outcome: 'WIN' | 'LOSS' | 'EXPIRED',
+  outcomePrice: number,
+  pipsMove: number
+): LearningResult {
+  const indicators = opportunity.technical_indicators || {};
+  const patterns = opportunity.patterns_detected || [];
+  
+  return {
+    lesson: `${outcome}: ${opportunity.signal_type} at ${opportunity.entry_price.toFixed(5)} (RSI: ${indicators?.rsi?.toFixed(1) || 'N/A'}) moved ${pipsMove.toFixed(1)} pips`,
+    successFactors: outcome === 'WIN' 
+      ? `${patterns.join(' + ') || 'Technical setup'} at ${opportunity.confidence.toFixed(0)}% confidence reached TP` 
+      : null,
+    failureReason: outcome !== 'WIN' 
+      ? `${outcome === 'LOSS' ? 'SL hit' : 'Expired'} after ${pipsMove.toFixed(1)} pip move against position` 
+      : null,
+    confidenceAdjustment: null
+  };
 }
 
 serve(async (req) => {
@@ -178,6 +260,11 @@ serve(async (req) => {
 
     console.log(`Found ${pendingOpps.length} opportunities to evaluate`);
 
+    // Get count of existing learnings for context
+    const { count: existingLearningsCount } = await supabase
+      .from('prediction_learnings')
+      .select('*', { count: 'exact', head: true });
+
     const results: any[] = [];
 
     for (const opp of pendingOpps) {
@@ -210,20 +297,71 @@ serve(async (req) => {
 
       console.log(`Opportunity ${opp.id}: ${outcome} at ${outcomePrice}`);
 
-      // Generate learning using AI
-      let learning = { lesson: '', successFactors: null as string | null, failureReason: null as string | null };
-      
-      if (lovableApiKey) {
-        learning = await generateLearning(opp as Opportunity, outcome, outcomePrice, lovableApiKey);
-      } else {
-        learning = {
-          lesson: `${outcome}: ${opp.signal_type} signal ${outcome === 'WIN' ? 'reached target' : 'did not perform as expected'}`,
-          successFactors: outcome === 'WIN' ? 'Technical alignment was correct' : null,
-          failureReason: outcome !== 'WIN' ? 'Market conditions changed' : null,
-        };
+      // Create pattern hash for deduplication
+      const patternHash = createPatternHash(
+        opp.patterns_detected || [], 
+        opp.signal_type
+      );
+
+      // Check for similar recent learnings to avoid duplicates
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentSimilarLearnings } = await supabase
+        .from('prediction_learnings')
+        .select('id, lesson_extracted, pattern_context')
+        .gte('created_at', twentyFourHoursAgo);
+
+      // Check if we have a very similar learning already
+      const hasSimilar = recentSimilarLearnings?.some(learning => {
+        const ctx = learning.pattern_context as any;
+        if (!ctx) return false;
+        const existingHash = createPatternHash(ctx.patterns || [], ctx.signal_type || '');
+        return existingHash === patternHash && ctx.outcome === outcome;
+      });
+
+      if (hasSimilar) {
+        console.log(`Skipping learning generation for ${opp.id} - similar learning exists`);
+        
+        // Still update the opportunity outcome, but skip learning generation
+        await supabase
+          .from('trading_opportunities')
+          .update({
+            outcome,
+            status: outcome === 'WIN' ? 'COMPLETED' : 'CLOSED',
+            evaluated_at: new Date().toISOString()
+          })
+          .eq('id', opp.id);
+
+        results.push({
+          id: opp.id,
+          outcome,
+          outcomePrice,
+          learning: 'Skipped - similar learning exists',
+          skipped: true
+        });
+        continue;
       }
 
-      // Store learning
+      // Generate learning using AI
+      let learning: LearningResult;
+      
+      if (lovableApiKey) {
+        learning = await generateLearning(
+          opp as Opportunity, 
+          outcome, 
+          outcomePrice, 
+          lovableApiKey,
+          existingLearningsCount || 0
+        );
+      } else {
+        learning = createFallbackLearning(
+          opp as Opportunity,
+          outcome,
+          outcomePrice,
+          Math.abs(outcomePrice - opp.entry_price) * 10000
+        );
+      }
+
+      // Store learning with enhanced pattern context
       const { data: newLearning, error: learningError } = await supabase
         .from('prediction_learnings')
         .insert({
@@ -233,13 +371,21 @@ serve(async (req) => {
           failure_reason: learning.failureReason,
           pattern_context: {
             patterns: opp.patterns_detected || [],
-            indicators: opp.technical_indicators || {},
+            indicators: {
+              rsi: opp.technical_indicators?.rsi,
+              macd_histogram: opp.technical_indicators?.macd?.histogram,
+              stochastic_k: opp.technical_indicators?.stochastic?.k,
+              atr: opp.technical_indicators?.atr
+            },
             signal_type: opp.signal_type,
-            confidence: opp.confidence
+            confidence: opp.confidence,
+            outcome: outcome,
+            confidence_adjustment: learning.confidenceAdjustment
           },
           market_conditions: {
             entry_price: opp.entry_price,
             outcome_price: outcomePrice,
+            pips_moved: Math.abs(outcomePrice - opp.entry_price) * 10000,
             trend_direction: opp.signal_type,
             trend_strength: opp.confidence,
             sentiment_score: 0
@@ -271,7 +417,8 @@ serve(async (req) => {
         id: opp.id,
         outcome,
         outcomePrice,
-        learning: learning.lesson
+        learning: learning.lesson,
+        skipped: false
       });
     }
 
@@ -282,6 +429,8 @@ serve(async (req) => {
         success: true, 
         message: `Evaluated ${results.length} opportunities`,
         evaluated: results.length,
+        newLearnings: results.filter(r => !r.skipped).length,
+        skipped: results.filter(r => r.skipped).length,
         results 
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
