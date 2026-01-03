@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ThemeProvider } from 'next-themes';
 import { supabase } from '@/integrations/supabase/client';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
@@ -21,21 +21,60 @@ import { usePredictionHistory } from '@/hooks/usePredictionHistory';
 import { useOpportunities } from '@/hooks/useOpportunities';
 import { useSubscription } from '@/hooks/useSubscription';
 import { Timeframe } from '@/types/trading';
-import { Loader2 } from 'lucide-react';
+import { Loader2, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { User } from '@supabase/supabase-js';
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [timeframe, setTimeframe] = useState<Timeframe>('1h');
   const [user, setUser] = useState<User | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isVerifyingPayment, setIsVerifyingPayment] = useState(false);
   
   const { data: forexData, isLoading: forexLoading, error: forexError } = useForexData(timeframe);
   const { prediction, isLoading: predictionLoading, generatePrediction } = usePrediction();
   const { predictions, isLoading: historyLoading } = usePredictionHistory();
   const { opportunities, isLoading: opportunitiesLoading, isScanning, lastScanned, triggerScan } = useOpportunities();
-  const { subscription, isLoading: subscriptionLoading, hasActiveSubscription } = useSubscription();
+  const { subscription, isLoading: subscriptionLoading, hasActiveSubscription, waitForSubscription } = useSubscription();
+
+  // Handle payment callback verification
+  useEffect(() => {
+    const reference = searchParams.get('reference');
+    const trxref = searchParams.get('trxref');
+    const paymentRef = reference || trxref;
+
+    if (paymentRef && !hasActiveSubscription && !isVerifyingPayment) {
+      setIsVerifyingPayment(true);
+      
+      // Clear the query params
+      setSearchParams({}, { replace: true });
+      
+      // Wait for webhook to process and update subscription
+      waitForSubscription(12000).then((sub) => {
+        setIsVerifyingPayment(false);
+        if (sub) {
+          const planName = sub.plan_type === 'lifetime' ? 'Lifetime' : 
+                          sub.plan_type === 'funded' ? 'Funded Trader' : 'Retail';
+          toast.success(
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-green-500" />
+              <div>
+                <p className="font-semibold">Welcome to ForexTell AI!</p>
+                <p className="text-sm text-muted-foreground">{planName} plan activated successfully</p>
+              </div>
+            </div>
+          );
+        } else {
+          toast.error(
+            'Payment verification pending. If your subscription doesn\'t appear within a few minutes, please contact support.',
+            { duration: 8000 }
+          );
+        }
+      });
+    }
+  }, [searchParams, hasActiveSubscription, isVerifyingPayment, waitForSubscription, setSearchParams]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -84,11 +123,14 @@ const Dashboard = () => {
     navigate('/');
   };
 
-  if (isAuthLoading || subscriptionLoading) {
+  if (isAuthLoading || subscriptionLoading || isVerifyingPayment) {
     return (
       <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
-        <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="min-h-screen bg-background flex flex-col items-center justify-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          {isVerifyingPayment && (
+            <p className="text-muted-foreground animate-pulse">Verifying your payment...</p>
+          )}
         </div>
       </ThemeProvider>
     );
