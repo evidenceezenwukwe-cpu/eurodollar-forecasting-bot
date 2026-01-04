@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 const WeeklyPostMortem = () => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
-  const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>({
+  const [dateRange, setDateRange] = useState<{ from: Date; to?: Date }>({
     from: startOfWeek(subWeeks(new Date(), 1), { weekStartsOn: 1 }),
     to: endOfWeek(subWeeks(new Date(), 1), { weekStartsOn: 1 }),
   });
@@ -109,11 +109,12 @@ const WeeklyPostMortem = () => {
                     defaultMonth={dateRange?.from}
                     selected={dateRange}
                     onSelect={(range) => {
-                      if (range?.from && range?.to) {
+                      if (range?.from) {
                         setDateRange({ from: range.from, to: range.to });
                       }
                     }}
                     numberOfMonths={2}
+                    className="pointer-events-auto"
                   />
                 </PopoverContent>
               </Popover>
