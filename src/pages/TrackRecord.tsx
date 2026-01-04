@@ -60,9 +60,11 @@ const TrackRecord = () => {
 
   useEffect(() => {
     const fetchPredictions = async () => {
+      // Only fetch predictions from Dec 26, 2025 onwards (current model version)
       const { data, error } = await supabase
         .from('predictions')
         .select('id, created_at, signal_type, confidence, entry_price, stop_loss, take_profit_1, outcome, outcome_price')
+        .gte('created_at', '2025-12-26T00:00:00Z')
         .order('created_at', { ascending: false })
         .limit(100);
 
@@ -141,7 +143,7 @@ const TrackRecord = () => {
                 </div>
                 <div>
                   <h1 className="font-semibold text-lg leading-none">Track Record</h1>
-                  <p className="text-xs text-muted-foreground">Public Performance History</p>
+                  <p className="text-xs text-muted-foreground">Performance since Dec 26, 2025</p>
                 </div>
               </div>
             </div>

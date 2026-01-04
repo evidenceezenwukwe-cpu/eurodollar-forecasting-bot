@@ -44,3 +44,9 @@ verify_jwt = false
 
 [functions.cancel-subscription]
 verify_jwt = false
+
+[functions.generate-weekly-analysis]
+verify_jwt = false
+
+[functions.generate-daily-bias]
+verify_jwt = false
