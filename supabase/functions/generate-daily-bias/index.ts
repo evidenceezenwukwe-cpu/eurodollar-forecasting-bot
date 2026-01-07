@@ -93,7 +93,7 @@ serve(async (req) => {
       })),
     };
 
-    // Generate AI content
+    // Generate AI content with retry logic
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       throw new Error("LOVABLE_API_KEY is not configured");
@@ -119,19 +119,7 @@ Generate a concise EUR/USD end-of-day recap that includes:
 
 Keep it under 280 characters. Be honest about results.`;
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: `Generate a ${type} post for EUR/USD based on this data:
+    const userContent = `Generate a ${type} post for EUR/USD based on this data:
 
 ${JSON.stringify(analysisContext, null, 2)}
 
@@ -148,20 +136,80 @@ Today's range:
 - High: ${todayHigh.toFixed(4)}
 - Low: ${todayLow.toFixed(4)}
 - Close: ${latestPrice.toFixed(4)}`
-}`,
-          },
-        ],
-      }),
-    });
+}`;
 
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error("AI API error:", aiResponse.status, errorText);
-      throw new Error(`AI API error: ${aiResponse.status}`);
+    // Retry logic for transient API errors
+    let aiContent = "";
+    let lastError: Error | null = null;
+    const maxRetries = 3;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`AI API attempt ${attempt}/${maxRetries}`);
+        
+        const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-flash",
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userContent },
+            ],
+          }),
+        });
+
+        if (aiResponse.status === 429) {
+          console.warn("Rate limited, using fallback content");
+          break;
+        }
+
+        if (aiResponse.status === 503 || aiResponse.status === 502) {
+          const errorText = await aiResponse.text();
+          console.warn(`AI API unavailable (${aiResponse.status}): ${errorText}`);
+          lastError = new Error(`AI API error: ${aiResponse.status}`);
+          
+          if (attempt < maxRetries) {
+            const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+            console.log(`Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          break;
+        }
+
+        if (!aiResponse.ok) {
+          const errorText = await aiResponse.text();
+          console.error("AI API error:", aiResponse.status, errorText);
+          lastError = new Error(`AI API error: ${aiResponse.status}`);
+          break;
+        }
+
+        const aiData = await aiResponse.json();
+        aiContent = aiData.choices?.[0]?.message?.content || "";
+        
+        if (aiContent) {
+          console.log("AI content generated successfully");
+          break;
+        }
+      } catch (fetchError) {
+        console.error(`Fetch error on attempt ${attempt}:`, fetchError);
+        lastError = fetchError instanceof Error ? fetchError : new Error(String(fetchError));
+        
+        if (attempt < maxRetries) {
+          const delay = Math.pow(2, attempt) * 1000;
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
     }
 
-    const aiData = await aiResponse.json();
-    const aiContent = aiData.choices?.[0]?.message?.content || "";
+    // Log if we're using fallback
+    if (!aiContent) {
+      console.log("Using fallback content due to AI API issues");
+    }
 
     // Fallback content if AI fails
     const fallbackMorning = `EUR/USD Daily Bias - ${date}
