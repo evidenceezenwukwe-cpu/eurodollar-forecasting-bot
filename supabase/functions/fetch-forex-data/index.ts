@@ -38,6 +38,7 @@ const SUPPORTED_PAIRS: Record<string, string> = {
   "GBP/JPY": "GBP/JPY",
   "AUD/JPY": "AUD/JPY",
   "XAU/USD": "XAU/USD",
+  "EUR/CHF": "EUR/CHF",
   // Alternative formats
   "EURUSD": "EUR/USD",
   "GBPUSD": "GBP/USD",
@@ -51,6 +52,7 @@ const SUPPORTED_PAIRS: Record<string, string> = {
   "GBPJPY": "GBP/JPY",
   "AUDJPY": "AUD/JPY",
   "XAUUSD": "XAU/USD",
+  "EURCHF": "EUR/CHF",
 };
 
 function normalizeSymbol(input: string): { dbSymbol: string; apiSymbol: string } {
@@ -159,6 +161,24 @@ function selectApiKey(keys: string[], attempt: number = 0): { key: string; index
   return { key: keys[index], index };
 }
 
+// Helper to delay execution
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Get all active currency pairs from the database
+async function getActiveCurrencyPairs(supabase: any): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("supported_currency_pairs")
+    .select("symbol")
+    .eq("is_active", true);
+  
+  if (error) {
+    console.error("Error fetching active currency pairs:", error);
+    return ["EUR/USD"]; // Fallback to EUR/USD
+  }
+  
+  return data?.map((p: any) => p.symbol) || ["EUR/USD"];
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -166,11 +186,28 @@ serve(async (req) => {
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // Parse body early to get symbol
+  // Parse body early to get parameters
   const body = await req.json().catch(() => ({}));
-  const { dbSymbol, apiSymbol } = normalizeSymbol(body?.symbol);
+  const fetchAll = body?.fetchAll === true;
+  const symbolsParam = body?.symbols as string[] | undefined;
   
-  console.log(`Fetching data for symbol: ${dbSymbol} (API: ${apiSymbol})`);
+  // Determine which symbols to fetch
+  let symbolsToFetch: string[] = [];
+  
+  if (fetchAll) {
+    // Fetch all active pairs from database
+    symbolsToFetch = await getActiveCurrencyPairs(supabase);
+    console.log(`fetchAll=true: Will fetch ${symbolsToFetch.length} active pairs`);
+  } else if (symbolsParam && Array.isArray(symbolsParam) && symbolsParam.length > 0) {
+    // Use provided symbols array
+    symbolsToFetch = symbolsParam;
+    console.log(`Using provided symbols array: ${symbolsToFetch.length} pairs`);
+  } else {
+    // Single symbol (legacy behavior)
+    const { dbSymbol } = normalizeSymbol(body?.symbol);
+    symbolsToFetch = [dbSymbol];
+    console.log(`Single symbol mode: ${dbSymbol}`);
+  }
 
   const readCache = async (symbol: string, timeframe: string, warning?: string): Promise<CachedResponse | null> => {
     const { data, error } = await supabase
@@ -270,11 +307,132 @@ serve(async (req) => {
     return { error: "All API keys exhausted or quota exceeded", isQuotaError: true };
   };
 
+  // Fetch and cache a single symbol
+  const fetchSingleSymbol = async (
+    symbol: string,
+    interval: string,
+    normalizedTimeframe: string,
+    outputsize: number,
+    apiKeys: string[]
+  ): Promise<{ success: boolean; symbol: string; error?: string; candleCount?: number }> => {
+    const { dbSymbol, apiSymbol } = normalizeSymbol(symbol);
+    
+    // Check if cache is fresh enough
+    const latestCached = await getLatestCachedTimestamp(dbSymbol, normalizedTimeframe);
+    if (latestCached) {
+      const ageMs = Date.now() - latestCached.getTime();
+      if (ageMs >= 0 && ageMs < cacheFreshnessMs(normalizedTimeframe)) {
+        console.log(`${dbSymbol}: Cache is fresh (${Math.round(ageMs / 1000)}s old), skipping API call`);
+        return { success: true, symbol: dbSymbol, candleCount: 0 };
+      }
+    }
+    
+    const fetchResult = await fetchWithKeyRotation(apiSymbol, interval, outputsize, apiKeys);
+    
+    if ('error' in fetchResult) {
+      console.error(`${dbSymbol}: API error - ${fetchResult.error}`);
+      return { success: false, symbol: dbSymbol, error: fetchResult.error };
+    }
+    
+    const data = fetchResult.data;
+    
+    if (!data?.values || !Array.isArray(data.values)) {
+      console.error(`${dbSymbol}: Invalid response format`);
+      return { success: false, symbol: dbSymbol, error: "Invalid response format" };
+    }
+    
+    console.log(`${dbSymbol}: Received ${data.values.length} candles from API`);
+    
+    const candles = data.values
+      .map((candle: any) => ({
+        timestamp: candle.datetime,
+        open: parseFloat(candle.open),
+        high: parseFloat(candle.high),
+        low: parseFloat(candle.low),
+        close: parseFloat(candle.close),
+        volume: candle.volume ? parseFloat(candle.volume) : null,
+      }))
+      .reverse();
+    
+    // Cache last 300 candles
+    const priceHistoryData = candles.slice(-300).map((c: any) => ({
+      symbol: dbSymbol,
+      timestamp: c.timestamp,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+      timeframe: normalizedTimeframe,
+    }));
+    
+    // Delete old cache for this specific symbol and timeframe
+    await supabase.from("price_history").delete().eq("symbol", dbSymbol).eq("timeframe", normalizedTimeframe);
+    
+    const { error: insertError } = await supabase.from("price_history").insert(priceHistoryData);
+    if (insertError) {
+      console.error(`${dbSymbol}: Error caching price data:`, insertError);
+    }
+    
+    return { success: true, symbol: dbSymbol, candleCount: candles.length };
+  };
+
   try {
     const timeframeRaw = (body?.timeframe ?? "1h") as Timeframe;
     const { interval, normalizedTimeframe } = normalizeInterval(timeframeRaw);
-
     const outputsize = clampOutputsize(body?.outputsize, defaultOutputsizeFor(normalizedTimeframe));
+    
+    const apiKeys = getApiKeys();
+    if (apiKeys.length === 0) {
+      return new Response(
+        JSON.stringify({ success: false, error: "No API keys configured" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // If fetching multiple symbols, process them sequentially with delay
+    if (symbolsToFetch.length > 1) {
+      console.log(`Starting multi-symbol fetch for ${symbolsToFetch.length} pairs...`);
+      
+      const results: Array<{ success: boolean; symbol: string; error?: string; candleCount?: number }> = [];
+      
+      for (let i = 0; i < symbolsToFetch.length; i++) {
+        const symbol = symbolsToFetch[i];
+        console.log(`[${i + 1}/${symbolsToFetch.length}] Processing ${symbol}...`);
+        
+        const result = await fetchSingleSymbol(symbol, interval, normalizedTimeframe, outputsize, apiKeys);
+        results.push(result);
+        
+        // Add delay between API calls to avoid rate limiting (except for last one)
+        if (i < symbolsToFetch.length - 1 && result.candleCount && result.candleCount > 0) {
+          console.log(`Waiting 1.5s before next request...`);
+          await delay(1500);
+        }
+      }
+      
+      const successful = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success);
+      
+      console.log(`Multi-symbol fetch complete: ${successful}/${symbolsToFetch.length} successful`);
+      
+      return new Response(
+        JSON.stringify({
+          success: true,
+          mode: "multi-symbol",
+          totalSymbols: symbolsToFetch.length,
+          successfulFetches: successful,
+          failedFetches: failed.length,
+          results,
+          errors: failed.map(f => ({ symbol: f.symbol, error: f.error })),
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // Single symbol fetch (original behavior)
+    const { dbSymbol, apiSymbol } = normalizeSymbol(symbolsToFetch[0]);
+    
+    console.log(`Fetching data for symbol: ${dbSymbol} (API: ${apiSymbol})`);
 
     // 1) Serve cache if it's fresh enough (prevents burning credits for repeated polling)
     const latestCached = await getLatestCachedTimestamp(dbSymbol, normalizedTimeframe);
@@ -288,21 +446,6 @@ serve(async (req) => {
           });
         }
       }
-    }
-
-    const apiKeys = getApiKeys();
-    if (apiKeys.length === 0) {
-      // If API keys missing, try cache anyway.
-      const cached = await readCache(dbSymbol, normalizedTimeframe, "API key missing; serving cache");
-      if (cached) {
-        return new Response(JSON.stringify(cached), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      return new Response(
-        JSON.stringify({ success: false, error: "No API keys configured (TWELVE_DATA_API_KEYS or TWELVE_DATA_API_KEY)" }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
     }
 
     console.log(
@@ -421,7 +564,8 @@ serve(async (req) => {
   } catch (error) {
     console.error("Error fetching forex data:", error);
 
-    // Final attempt: return any cached data we have.
+    // Final attempt: return any cached data we have for first symbol.
+    const { dbSymbol } = normalizeSymbol(symbolsToFetch[0]);
     const cached = (await readCache(dbSymbol, "1h", error instanceof Error ? error.message : "Unknown error")) ??
       (await readCache(dbSymbol, "4h", error instanceof Error ? error.message : "Unknown error"));
     if (cached) {
