@@ -852,7 +852,8 @@ async function scanSymbol(
   });
 
   // Only create opportunity if conditions are met
-  if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
+  // Threshold lowered to 50% to allow signals from Tier 1 patterns (>50% win rate)
+  if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2) {
     console.log(`[${symbol}] No high-probability opportunity detected`);
     return { 
       success: true, 
