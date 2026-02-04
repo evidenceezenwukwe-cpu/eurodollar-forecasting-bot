@@ -702,6 +702,16 @@ function analyzeOpportunity(
         totalWeight += weight;
       }
       confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
+      
+      // Add modest confluence bonus for multiple Tier 1 patterns (ICT-style)
+      // +2% per additional Tier 1 pattern, capped at +6%
+      const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
+      if (tier1Patterns.length > 1) {
+        const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
+        confidence += confluenceBonus;
+        reasons.push(`🎯 Confluence: ${tier1Patterns.length} Tier 1 patterns (+${confluenceBonus}%)`);
+      }
+      
       reasons.push(`📊 Data-driven confidence from ${patternsWithWinRates.length} patterns`);
     } else {
       // Fallback: use base expected win rates if no DB stats
@@ -723,6 +733,16 @@ function analyzeOpportunity(
         totalWeight += weight;
       }
       confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
+      
+      // Add modest confluence bonus for multiple Tier 1 patterns (ICT-style)
+      // +2% per additional Tier 1 pattern, capped at +6%
+      const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
+      if (tier1Patterns.length > 1) {
+        const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
+        confidence += confluenceBonus;
+        reasons.push(`🎯 Confluence: ${tier1Patterns.length} Tier 1 patterns (+${confluenceBonus}%)`);
+      }
+      
       reasons.push(`📊 Data-driven confidence from ${patternsWithWinRates.length} patterns`);
     } else {
       confidence = 52; // Conservative estimate
@@ -852,7 +872,8 @@ async function scanSymbol(
   });
 
   // Only create opportunity if conditions are met
-  if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
+  // Threshold lowered to 50% to allow signals from Tier 1 patterns (>50% win rate)
+  if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2) {
     console.log(`[${symbol}] No high-probability opportunity detected`);
     return { 
       success: true, 
