@@ -27,39 +27,47 @@ interface CurrencyPairConfig {
   pip_value: number;
 }
 
-// Dynamic pip values (populated from database)
 let dynamicPipValues: Record<string, number> = {};
 
 function getPipValue(symbol: string): number {
   return dynamicPipValues[symbol] || DEFAULT_PIP_VALUES[symbol] || 0.0001;
 }
 
-// Fetch active currency pairs from database
 async function getActiveCurrencyPairs(supabase: any): Promise<CurrencyPairConfig[]> {
   const { data, error } = await supabase
     .from('supported_currency_pairs')
     .select('symbol, pip_value')
     .eq('is_active', true);
-  
+
   if (error) {
     console.error('Failed to fetch currency pairs:', error);
     return [];
   }
-  
-  // Update dynamic pip values
+
   dynamicPipValues = {};
   for (const pair of data || []) {
     dynamicPipValues[pair.symbol] = Number(pair.pip_value);
   }
-  
+
   console.log(`Loaded ${data?.length || 0} active currency pairs from database`);
   return data || [];
 }
 
-function priceToPips(price: number, symbol: string): number {
-  return price / getPipValue(symbol);
+function isForexMarketOpen(): { isOpen: boolean; reason: string } {
+  const now = new Date();
+  const utcDay = now.getUTCDay();
+  const utcHour = now.getUTCHours();
+
+  if (utcDay === 6) return { isOpen: false, reason: "Forex market is closed on Saturdays" };
+  if (utcDay === 0 && utcHour < 21) return { isOpen: false, reason: "Forex market opens Sunday 21:00 UTC" };
+  if (utcDay === 5 && utcHour >= 21) return { isOpen: false, reason: "Forex market closed Friday 21:00 UTC" };
+
+  return { isOpen: true, reason: "Market is open" };
 }
 
+// =====================================================================
+// Candle type
+// =====================================================================
 interface Candle {
   timestamp: string;
   open: number;
@@ -69,817 +77,630 @@ interface Candle {
   volume?: number;
 }
 
-interface TechnicalIndicators {
-  rsi: number;
-  macd: { value: number; signal: number; histogram: number };
-  ema9: number;
-  ema21: number;
-  ema50: number;
-  ema200: number;
-  bollingerBands: { upper: number; middle: number; lower: number };
-  stochastic: { k: number; d: number };
-  atr: number;
-  supportLevels: number[];
-  resistanceLevels: number[];
+// =====================================================================
+// Step 0: Ensure timeframe data is cached via fetch-forex-data
+// =====================================================================
+async function ensureTimeframeData(supabase: any, symbol: string, timeframe: string): Promise<void> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+  try {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/fetch-forex-data`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${supabaseAnonKey}`,
+      },
+      body: JSON.stringify({ symbol, timeframe, outputsize: 200 }),
+    });
+    const result = await resp.json().catch(() => ({}));
+    console.log(`[${symbol}] ensureTimeframeData(${timeframe}): success=${result?.success}, source=${result?.meta?.source || 'api'}`);
+  } catch (err) {
+    console.error(`[${symbol}] ensureTimeframeData(${timeframe}) failed:`, err);
+  }
 }
 
-// Check if forex market is open
-function isForexMarketOpen(): { isOpen: boolean; reason: string } {
-  const now = new Date();
-  const utcDay = now.getUTCDay();
-  const utcHour = now.getUTCHours();
-  
-  if (utcDay === 6) {
-    return { isOpen: false, reason: "Forex market is closed on Saturdays" };
+// =====================================================================
+// Read cached candles from price_history
+// =====================================================================
+async function readCandles(supabase: any, symbol: string, timeframe: string, limit = 200): Promise<Candle[]> {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('timestamp, open, high, low, close, volume')
+    .eq('symbol', symbol)
+    .eq('timeframe', timeframe)
+    .order('timestamp', { ascending: true })
+    .limit(limit);
+
+  if (error || !data) {
+    console.error(`[${symbol}] readCandles(${timeframe}) error:`, error);
+    return [];
   }
-  if (utcDay === 0 && utcHour < 21) {
-    return { isOpen: false, reason: "Forex market opens Sunday 21:00 UTC" };
-  }
-  if (utcDay === 5 && utcHour >= 21) {
-    return { isOpen: false, reason: "Forex market closed Friday 21:00 UTC" };
-  }
-  
-  return { isOpen: true, reason: "Market is open" };
+
+  return data.map((r: any) => ({
+    timestamp: r.timestamp,
+    open: Number(r.open),
+    high: Number(r.high),
+    low: Number(r.low),
+    close: Number(r.close),
+    volume: r.volume === null ? undefined : Number(r.volume),
+  }));
 }
 
-// Calculate RSI
-function calculateRSI(closes: number[], period = 14): number {
-  if (closes.length < period + 1) return 50;
-  
-  let gains = 0;
-  let losses = 0;
-  
-  for (let i = closes.length - period; i < closes.length; i++) {
-    const change = closes[i] - closes[i - 1];
-    if (change > 0) gains += change;
-    else losses -= change;
+// =====================================================================
+// Aggregate daily candles into weekly candles
+// =====================================================================
+function aggregateWeeklyCandles(dailyCandles: Candle[]): Candle[] {
+  if (dailyCandles.length === 0) return [];
+
+  const weekMap = new Map<string, Candle[]>();
+
+  for (const c of dailyCandles) {
+    const d = new Date(c.timestamp);
+    // ISO week key: year-weekNumber
+    const jan1 = new Date(d.getFullYear(), 0, 1);
+    const dayIndex = Math.floor((d.getTime() - jan1.getTime()) / 86400000);
+    const weekNum = Math.ceil((dayIndex + jan1.getDay() + 1) / 7);
+    const key = `${d.getFullYear()}-W${weekNum}`;
+
+    if (!weekMap.has(key)) weekMap.set(key, []);
+    weekMap.get(key)!.push(c);
   }
-  
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
-  
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+
+  const weekly: Candle[] = [];
+  for (const [, candles] of weekMap) {
+    if (candles.length === 0) continue;
+    weekly.push({
+      timestamp: candles[0].timestamp,
+      open: candles[0].open,
+      high: Math.max(...candles.map(c => c.high)),
+      low: Math.min(...candles.map(c => c.low)),
+      close: candles[candles.length - 1].close,
+    });
+  }
+
+  return weekly.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 }
 
-// Calculate EMA
-function calculateEMA(data: number[], period: number): number {
-  if (data.length < period) return data[data.length - 1] || 0;
-  
-  const multiplier = 2 / (period + 1);
-  let ema = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  
-  for (let i = period; i < data.length; i++) {
-    ema = (data[i] - ema) * multiplier + ema;
-  }
-  
-  return ema;
-}
-
-// Calculate MACD
-function calculateMACD(closes: number[]): { value: number; signal: number; histogram: number } {
-  const ema12 = calculateEMA(closes, 12);
-  const ema26 = calculateEMA(closes, 26);
-  const macdLine = ema12 - ema26;
-  
-  const macdHistory: number[] = [];
-  for (let i = 26; i < closes.length; i++) {
-    const shortEma = calculateEMA(closes.slice(0, i + 1), 12);
-    const longEma = calculateEMA(closes.slice(0, i + 1), 26);
-    macdHistory.push(shortEma - longEma);
-  }
-  
-  const signalLine = macdHistory.length >= 9 ? calculateEMA(macdHistory, 9) : macdLine;
-  
-  return {
-    value: macdLine,
-    signal: signalLine,
-    histogram: macdLine - signalLine
-  };
-}
-
-// Calculate Bollinger Bands
-function calculateBollingerBands(closes: number[], period = 20): { upper: number; middle: number; lower: number } {
-  if (closes.length < period) {
-    const last = closes[closes.length - 1];
-    return { upper: last, middle: last, lower: last };
-  }
-  
-  const slice = closes.slice(-period);
-  const sma = slice.reduce((a, b) => a + b, 0) / period;
-  const variance = slice.reduce((a, b) => a + Math.pow(b - sma, 2), 0) / period;
-  const stdDev = Math.sqrt(variance);
-  
-  return {
-    upper: sma + stdDev * 2,
-    middle: sma,
-    lower: sma - stdDev * 2,
-  };
-}
-
-// Calculate Stochastic
-function calculateStochastic(highs: number[], lows: number[], closes: number[], period = 14): { k: number; d: number } {
-  if (closes.length < period) return { k: 50, d: 50 };
-  
-  const highSlice = highs.slice(-period);
-  const lowSlice = lows.slice(-period);
-  const currentClose = closes[closes.length - 1];
-  
-  const highestHigh = Math.max(...highSlice);
-  const lowestLow = Math.min(...lowSlice);
-  
-  if (highestHigh === lowestLow) return { k: 50, d: 50 };
-  
-  const k = ((currentClose - lowestLow) / (highestHigh - lowestLow)) * 100;
-  
-  const kValues: number[] = [];
-  for (let i = period; i <= closes.length; i++) {
-    const h = Math.max(...highs.slice(i - period, i));
-    const l = Math.min(...lows.slice(i - period, i));
-    const c = closes[i - 1];
-    kValues.push(h === l ? 50 : ((c - l) / (h - l)) * 100);
-  }
-  
-  const d = kValues.length >= 3 
-    ? kValues.slice(-3).reduce((a, b) => a + b, 0) / 3 
-    : k;
-  
-  return { k, d };
-}
-
-// Calculate ATR
-function calculateATR(highs: number[], lows: number[], closes: number[], period = 14): number {
-  if (closes.length < period + 1) return 0;
-  
-  const trueRanges: number[] = [];
-  for (let i = 1; i < closes.length; i++) {
-    const tr = Math.max(
-      highs[i] - lows[i],
-      Math.abs(highs[i] - closes[i - 1]),
-      Math.abs(lows[i] - closes[i - 1])
-    );
-    trueRanges.push(tr);
-  }
-  
-  return trueRanges.slice(-period).reduce((a, b) => a + b, 0) / period;
-}
-
-// Calculate Support/Resistance
-function calculateSupportResistance(highs: number[], lows: number[]): { support: number[]; resistance: number[] } {
+// =====================================================================
+// Calculate Support/Resistance levels from candles (pivot-based)
+// =====================================================================
+function calculateSR(candles: Candle[]): { support: number[]; resistance: number[] } {
   const support: number[] = [];
   const resistance: number[] = [];
-  
-  const lookback = Math.min(100, highs.length);
-  const recentHighs = highs.slice(-lookback);
-  const recentLows = lows.slice(-lookback);
-  
-  for (let i = 2; i < lookback - 2; i++) {
-    if (recentHighs[i] > recentHighs[i-1] && recentHighs[i] > recentHighs[i-2] &&
-        recentHighs[i] > recentHighs[i+1] && recentHighs[i] > recentHighs[i+2]) {
-      resistance.push(recentHighs[i]);
+
+  const lookback = Math.min(50, candles.length);
+  const recent = candles.slice(-lookback);
+
+  for (let i = 2; i < recent.length - 2; i++) {
+    // Swing high
+    if (recent[i].high > recent[i - 1].high && recent[i].high > recent[i - 2].high &&
+        recent[i].high > recent[i + 1].high && recent[i].high > recent[i + 2].high) {
+      resistance.push(recent[i].high);
     }
-    if (recentLows[i] < recentLows[i-1] && recentLows[i] < recentLows[i-2] &&
-        recentLows[i] < recentLows[i+1] && recentLows[i] < recentLows[i+2]) {
-      support.push(recentLows[i]);
+    // Swing low
+    if (recent[i].low < recent[i - 1].low && recent[i].low < recent[i - 2].low &&
+        recent[i].low < recent[i + 1].low && recent[i].low < recent[i + 2].low) {
+      support.push(recent[i].low);
     }
   }
-  
+
   return {
-    support: support.sort((a, b) => b - a).slice(0, 3),
-    resistance: resistance.sort((a, b) => a - b).slice(0, 3)
+    support: support.sort((a, b) => b - a).slice(0, 5),
+    resistance: resistance.sort((a, b) => a - b).slice(0, 5),
   };
 }
 
-// Detect patterns
-function detectPatterns(candles: Candle[]): string[] {
-  const patterns: string[] = [];
-  if (candles.length < 50) return patterns;
-  
-  const closes = candles.map(c => c.close);
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
-  const opens = candles.map(c => c.open);
-  
-  const last = candles.length - 1;
-  
-  // Doji
-  for (let i = last; i > last - 3 && i >= 0; i--) {
-    const body = Math.abs(closes[i] - opens[i]);
-    const range = highs[i] - lows[i];
-    if (range > 0 && body / range < 0.1) {
-      patterns.push('Doji - Indecision');
-      break;
-    }
-  }
-  
-  // Engulfing patterns
-  if (last >= 1) {
-    const prevBody = Math.abs(closes[last-1] - opens[last-1]);
-    const currBody = Math.abs(closes[last] - opens[last]);
-    
-    if (closes[last-1] < opens[last-1] && closes[last] > opens[last] &&
-        opens[last] <= closes[last-1] && closes[last] >= opens[last-1] && currBody > prevBody) {
-      patterns.push('Bullish Engulfing');
-    }
-    
-    if (closes[last-1] > opens[last-1] && closes[last] < opens[last] &&
-        opens[last] >= closes[last-1] && closes[last] <= opens[last-1] && currBody > prevBody) {
-      patterns.push('Bearish Engulfing');
-    }
-  }
-  
-  // Trend via EMAs
-  const ema20 = calculateEMA(closes, 20);
-  const ema50 = calculateEMA(closes, 50);
-  const currentPrice = closes[last];
-  
-  if (currentPrice > ema20 && ema20 > ema50) {
-    patterns.push('Strong Uptrend');
-  } else if (currentPrice < ema20 && ema20 < ema50) {
-    patterns.push('Strong Downtrend');
-  }
-  
-  return patterns;
+// =====================================================================
+// Step A: Higher Timeframe Bias Detection (Weekly / Daily)
+// =====================================================================
+interface HTFBias {
+  bias: 'BULLISH' | 'BEARISH';
+  rejectionLevel: number;
+  rejectionTimeframe: 'Weekly' | 'Daily';
+  keyLevel: number;
 }
 
-// Calculate all indicators
-function calculateIndicators(candles: Candle[]): TechnicalIndicators {
-  const closes = candles.map(c => c.close);
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
-  
-  const { support, resistance } = calculateSupportResistance(highs, lows);
-  
-  return {
-    rsi: calculateRSI(closes),
-    macd: calculateMACD(closes),
-    ema9: calculateEMA(closes, 9),
-    ema21: calculateEMA(closes, 21),
-    ema50: calculateEMA(closes, 50),
-    ema200: calculateEMA(closes, 200),
-    bollingerBands: calculateBollingerBands(closes),
-    stochastic: calculateStochastic(highs, lows, closes),
-    atr: calculateATR(highs, lows, closes),
-    supportLevels: support,
-    resistanceLevels: resistance
-  };
-}
+function detectCandleRejection(candles: Candle[], direction: 'high' | 'low', lookback = 5): {
+  found: boolean;
+  rejectionLevel: number;
+  candleIndex: number;
+} {
+  if (candles.length < 3) return { found: false, rejectionLevel: 0, candleIndex: -1 };
 
-// Base pattern weights (fallback when no stats available)
-// These are used as defaults and get overridden by dynamic weights from DB
-const BASE_PATTERN_WEIGHTS = {
-  // Tier 1: Proven winners (base)
-  rsi_oversold: { weight: 1.5, tier: 1, expectedWinRate: 52.4 },
-  rsi_overbought: { weight: 1.5, tier: 1, expectedWinRate: 52.16 },
-  bb_lower_touch: { weight: 1.3, tier: 1, expectedWinRate: 52.06 },
-  bb_upper_touch: { weight: 1.3, tier: 1, expectedWinRate: 51.67 },
-  
-  // Tier 2: Neutral
-  stochastic_oversold: { weight: 1.0, tier: 2, expectedWinRate: 50 },
-  stochastic_overbought: { weight: 1.0, tier: 2, expectedWinRate: 50 },
-  
-  // Tier 3: Weak edge
-  macd_bullish_cross: { weight: 0.5, tier: 3, expectedWinRate: 47.85 },
-  macd_bearish_cross: { weight: 0.5, tier: 3, expectedWinRate: 47.39 },
-  bullish_engulfing: { weight: 0.5, tier: 3, expectedWinRate: 48.39 },
-  bearish_engulfing: { weight: 0.5, tier: 3, expectedWinRate: 48.24 },
-  
-  // Tier 4: Actively harmful - penalize
-  golden_cross: { weight: -0.5, tier: 4, expectedWinRate: 45.89 },
-  death_cross: { weight: -0.5, tier: 4, expectedWinRate: 45.87 },
-} as const;
+  const end = candles.length - 1;
+  const start = Math.max(1, end - lookback);
 
-type PatternName = keyof typeof BASE_PATTERN_WEIGHTS;
+  for (let i = end; i >= start; i--) {
+    const curr = candles[i];
+    const prev = candles[i - 1];
 
-// NEW: Get pair-specific Tier 1 threshold based on historical performance
-// Strong pairs (best pattern >=52%): Keep strict 52% threshold
-// Weak pairs (best pattern 50.5%-52%): Use adaptive threshold to enable signals
-function getTier1Threshold(symbol: string, patternStats: any[]): number {
-  const symbolStats = patternStats.filter(p => p.symbol === symbol);
-  if (symbolStats.length === 0) return 52; // Default to strict threshold
-  
-  const bestWinRate = Math.max(...symbolStats.map(p => 
-    p.win_rate_24h || p.win_rate_12h || p.win_rate_48h || p.win_rate_4h || 50
-  ));
-  
-  // Adaptive threshold based on pair's best historical performance:
-  // - Strong pairs (>=52%): Keep strict 52% threshold
-  // - Moderate pairs (51-52%): Lower to 51%
-  // - Weak pairs (50.5-51%): Lower to 50.5%
-  // - Very weak pairs (<50.5%): Keep at 52% (effectively disable)
-  if (bestWinRate >= 52) return 52;
-  if (bestWinRate >= 51) return 51;
-  if (bestWinRate >= 50.5) return 50.5;
-  return 52; // Disable pairs below 50.5%
-}
-
-// Calculate dynamic weight and tier based on actual win rate from database
-// Now accepts pair-specific tier1Threshold for adaptive classification
-function getDynamicPatternWeight(
-  patternName: PatternName, 
-  winRate: number | null,
-  tier1Threshold: number = 52  // NEW: pair-specific threshold
-): { weight: number; tier: number } {
-  const baseWeight = BASE_PATTERN_WEIGHTS[patternName];
-  
-  // If no win rate data, use base weights
-  if (winRate === null || winRate === undefined) {
-    return { weight: baseWeight.weight, tier: baseWeight.tier };
-  }
-  
-  // Dynamic tier based on ACTUAL win rate with ADAPTIVE threshold:
-  // Tier 1: >tier1Threshold (pair-specific, 50.5-52%)
-  // Tier 2: 50-tier1Threshold (neutral)
-  // Tier 3: 48-50% (weak)
-  // Tier 4: <48% (harmful)
-  let tier: number;
-  let weight: number;
-  
-  if (winRate > tier1Threshold) {
-    tier = 1;
-    // Scale weight based on how much above threshold
-    weight = 1.3 + ((winRate - tier1Threshold) * 0.1);
-  } else if (winRate >= 50) {
-    tier = 2;
-    // Neutral: 1.0 weight
-    weight = 1.0;
-  } else if (winRate >= 48) {
-    tier = 3;
-    // Weak: 0.3-0.5 weight
-    weight = 0.3 + ((winRate - 48) * 0.1);
-  } else {
-    tier = 4;
-    // Harmful: negative weight, scales with how bad it is
-    weight = -0.5 - ((48 - winRate) * 0.1);
-  }
-  
-  return { weight: Math.max(-1, Math.min(2, weight)), tier };
-}
-
-interface PatternDetection {
-  name: PatternName;
-  type: 'BUY' | 'SELL';
-  tier: number;
-  weight: number;
-  reason: string;
-  actualWinRate?: number;
-}
-
-// Analyze opportunity with DYNAMIC pattern weights based on actual historical win rates
-function analyzeOpportunity(
-  indicators: TechnicalIndicators,
-  patterns: string[],
-  currentPrice: number,
-  patternStats: any[],
-  symbol: string
-): { signal: 'BUY' | 'SELL' | null; confidence: number; reasons: string[]; patternData: any[] } {
-  const buyPatterns: PatternDetection[] = [];
-  const sellPatterns: PatternDetection[] = [];
-  const matchedPatternStats: any[] = [];
-  
-  // Filter pattern stats for this symbol (prioritize symbol-specific, then fall back to null/EUR/USD)
-  const symbolStats = patternStats.filter(p => p.symbol === symbol);
-  const fallbackStats = patternStats.filter(p => p.symbol === null || p.symbol === 'EUR/USD');
-  
-  // Calculate ADAPTIVE Tier 1 threshold for this specific pair
-  // Strong pairs use 52%, weaker pairs use 51% or 50.5% based on their best historical win rate
-  const tier1Threshold = getTier1Threshold(symbol, patternStats);
-  console.log(`[${symbol}] Using adaptive Tier 1 threshold: ${tier1Threshold}%`);
-  
-  // Helper to get win rate for a pattern (prefer 24h timeframe as most reliable)
-  const getPatternWinRate = (patternName: string, signalType: 'BUY' | 'SELL'): { winRate: number | null; stat: any | null } => {
-    let stat = symbolStats.find(p => p.pattern_name === patternName && p.signal_type === signalType);
-    if (!stat) {
-      stat = fallbackStats.find(p => p.pattern_name === patternName && p.signal_type === signalType);
-    }
-    if (stat) {
-      // Use 24h win rate as primary, fall back to others
-      const winRate = stat.win_rate_24h || stat.win_rate_12h || stat.win_rate_48h || stat.win_rate_4h;
-      return { winRate, stat };
-    }
-    return { winRate: null, stat: null };
-  };
-  
-  // Detect patterns using DYNAMIC weights from database with ADAPTIVE thresholds
-  
-  // RSI Oversold
-  if (indicators.rsi < 30) {
-    const { winRate, stat } = getPatternWinRate('rsi_oversold', 'BUY');
-    const { weight, tier } = getDynamicPatternWeight('rsi_oversold', winRate, tier1Threshold);
-    buyPatterns.push({ 
-      name: 'rsi_oversold', 
-      type: 'BUY', 
-      tier, 
-      weight,
-      reason: `RSI oversold (<30) - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  } else if (indicators.rsi < 40) {
-    buyPatterns.push({ 
-      name: 'rsi_oversold', 
-      type: 'BUY', 
-      tier: 3, 
-      weight: 0.3,
-      reason: 'RSI approaching oversold (30-40) - weak signal'
-    });
-  }
-  
-  // RSI Overbought
-  if (indicators.rsi > 70) {
-    const { winRate, stat } = getPatternWinRate('rsi_overbought', 'SELL');
-    const { weight, tier } = getDynamicPatternWeight('rsi_overbought', winRate, tier1Threshold);
-    sellPatterns.push({ 
-      name: 'rsi_overbought', 
-      type: 'SELL', 
-      tier, 
-      weight,
-      reason: `RSI overbought (>70) - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  } else if (indicators.rsi > 60) {
-    sellPatterns.push({ 
-      name: 'rsi_overbought', 
-      type: 'SELL', 
-      tier: 3, 
-      weight: 0.3,
-      reason: 'RSI approaching overbought (60-70) - weak signal'
-    });
-  }
-  
-  // Bollinger Band Lower Touch
-  if (currentPrice < indicators.bollingerBands.lower) {
-    const { winRate, stat } = getPatternWinRate('bb_lower_touch', 'BUY');
-    const { weight, tier } = getDynamicPatternWeight('bb_lower_touch', winRate, tier1Threshold);
-    buyPatterns.push({ 
-      name: 'bb_lower_touch', 
-      type: 'BUY', 
-      tier, 
-      weight,
-      reason: `Price below lower BB - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  }
-  
-  // Bollinger Band Upper Touch
-  if (currentPrice > indicators.bollingerBands.upper) {
-    const { winRate, stat } = getPatternWinRate('bb_upper_touch', 'SELL');
-    const { weight, tier } = getDynamicPatternWeight('bb_upper_touch', winRate, tier1Threshold);
-    sellPatterns.push({ 
-      name: 'bb_upper_touch', 
-      type: 'SELL', 
-      tier, 
-      weight,
-      reason: `Price above upper BB - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  }
-  
-  // Stochastic Oversold
-  if (indicators.stochastic.k < 20 && indicators.stochastic.d < 20) {
-    const { winRate, stat } = getPatternWinRate('stochastic_oversold', 'BUY');
-    const { weight, tier } = getDynamicPatternWeight('stochastic_oversold', winRate, tier1Threshold);
-    buyPatterns.push({ 
-      name: 'stochastic_oversold', 
-      type: 'BUY', 
-      tier, 
-      weight,
-      reason: `Stochastic deeply oversold (<20) - Tier ${tier}`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  }
-  
-  // Stochastic Overbought
-  if (indicators.stochastic.k > 80 && indicators.stochastic.d > 80) {
-    const { winRate, stat } = getPatternWinRate('stochastic_overbought', 'SELL');
-    const { weight, tier } = getDynamicPatternWeight('stochastic_overbought', winRate, tier1Threshold);
-    sellPatterns.push({ 
-      name: 'stochastic_overbought', 
-      type: 'SELL', 
-      tier, 
-      weight,
-      reason: `Stochastic deeply overbought (>80) - Tier ${tier}`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  }
-  
-  // MACD Bullish Cross
-  if (indicators.macd.histogram > 0 && indicators.macd.value > indicators.macd.signal) {
-    const { winRate, stat } = getPatternWinRate('macd_bullish_cross', 'BUY');
-    const { weight, tier } = getDynamicPatternWeight('macd_bullish_cross', winRate, tier1Threshold);
-    buyPatterns.push({ 
-      name: 'macd_bullish_cross', 
-      type: 'BUY', 
-      tier, 
-      weight,
-      reason: `MACD bullish cross - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  }
-  
-  // MACD Bearish Cross
-  if (indicators.macd.histogram < 0 && indicators.macd.value < indicators.macd.signal) {
-    const { winRate, stat } = getPatternWinRate('macd_bearish_cross', 'SELL');
-    const { weight, tier } = getDynamicPatternWeight('macd_bearish_cross', winRate, tier1Threshold);
-    sellPatterns.push({ 
-      name: 'macd_bearish_cross', 
-      type: 'SELL', 
-      tier, 
-      weight,
-      reason: `MACD bearish cross - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  }
-  
-  // EMA alignment (Golden/Death Cross)
-  const priceAboveEma21 = currentPrice > indicators.ema21;
-  const priceAboveEma50 = currentPrice > indicators.ema50;
-  const ema21AboveEma50 = indicators.ema21 > indicators.ema50;
-  
-  if (priceAboveEma21 && priceAboveEma50 && ema21AboveEma50) {
-    const { winRate, stat } = getPatternWinRate('golden_cross', 'BUY');
-    const { weight, tier } = getDynamicPatternWeight('golden_cross', winRate, tier1Threshold);
-    buyPatterns.push({ 
-      name: 'golden_cross', 
-      type: 'BUY', 
-      tier, 
-      weight,
-      reason: `Golden Cross alignment - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  } else if (!priceAboveEma21 && !priceAboveEma50 && !ema21AboveEma50) {
-    const { winRate, stat } = getPatternWinRate('death_cross', 'SELL');
-    const { weight, tier } = getDynamicPatternWeight('death_cross', winRate, tier1Threshold);
-    sellPatterns.push({ 
-      name: 'death_cross', 
-      type: 'SELL', 
-      tier, 
-      weight,
-      reason: `Death Cross alignment - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-      actualWinRate: winRate || undefined
-    });
-    if (stat) matchedPatternStats.push(stat);
-  }
-  
-  // Candlestick patterns
-  patterns.forEach(p => {
-    if (p.includes('Bullish') && p.includes('Engulfing')) {
-      const { winRate, stat } = getPatternWinRate('bullish_engulfing', 'BUY');
-      const { weight, tier } = getDynamicPatternWeight('bullish_engulfing', winRate, tier1Threshold);
-      buyPatterns.push({ 
-        name: 'bullish_engulfing', 
-        type: 'BUY', 
-        tier, 
-        weight,
-        reason: `Bullish Engulfing - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-        actualWinRate: winRate || undefined
-      });
-      if (stat && !matchedPatternStats.includes(stat)) matchedPatternStats.push(stat);
-    }
-    if (p.includes('Bearish') && p.includes('Engulfing')) {
-      const { winRate, stat } = getPatternWinRate('bearish_engulfing', 'SELL');
-      const { weight, tier } = getDynamicPatternWeight('bearish_engulfing', winRate, tier1Threshold);
-      sellPatterns.push({ 
-        name: 'bearish_engulfing', 
-        type: 'SELL', 
-        tier, 
-        weight,
-        reason: `Bearish Engulfing - Tier ${tier} (${winRate?.toFixed(1) || 'N/A'}% win rate)`,
-        actualWinRate: winRate || undefined
-      });
-      if (stat && !matchedPatternStats.includes(stat)) matchedPatternStats.push(stat);
-    }
-  });
-  
-  // Calculate weighted scores
-  const buyScore = buyPatterns.reduce((sum, p) => sum + p.weight, 0);
-  const sellScore = sellPatterns.reduce((sum, p) => sum + p.weight, 0);
-  
-  // Count patterns by tier
-  const buyTier1Count = buyPatterns.filter(p => p.tier === 1).length;
-  const sellTier1Count = sellPatterns.filter(p => p.tier === 1).length;
-  const buyTier4Count = buyPatterns.filter(p => p.tier === 4).length;
-  const sellTier4Count = sellPatterns.filter(p => p.tier === 4).length;
-  
-  console.log(`[${symbol}] Pattern analysis: BUY score=${buyScore.toFixed(2)} (${buyTier1Count} T1, ${buyTier4Count} T4), SELL score=${sellScore.toFixed(2)} (${sellTier1Count} T1, ${sellTier4Count} T4)`);
-  
-  // Decision logic:
-  // 1. REQUIRE at least one Tier 1 pattern
-  // 2. Weighted score must be positive and exceed threshold (1.5)
-  // 3. Must have net advantage over opposing side
-  
-  const SCORE_THRESHOLD = 1.5;
-  let signal: 'BUY' | 'SELL' | null = null;
-  let confidence = 50;
-  let reasons: string[] = [];
-  
-  const netBuyAdvantage = buyScore - sellScore;
-  const netSellAdvantage = sellScore - buyScore;
-  
-  if (buyTier1Count >= 1 && buyScore >= SCORE_THRESHOLD && netBuyAdvantage >= 0.5) {
-    signal = 'BUY';
-    reasons = buyPatterns.map(p => p.reason);
-    
-    // DATA-DRIVEN CONFIDENCE: Use actual win rates from pattern statistics
-    // Instead of arbitrary bonuses, calculate average win rate of detected patterns
-    const patternsWithWinRates = buyPatterns.filter(p => p.actualWinRate !== undefined);
-    if (patternsWithWinRates.length > 0) {
-      // Weight by tier: Tier 1 patterns count more in average
-      let weightedSum = 0;
-      let totalWeight = 0;
-      for (const p of patternsWithWinRates) {
-        const weight = p.tier === 1 ? 2.0 : p.tier === 2 ? 1.0 : 0.5;
-        weightedSum += (p.actualWinRate || 50) * weight;
-        totalWeight += weight;
+    if (direction === 'high') {
+      // Bearish rejection: swept previous high but closed below it
+      if (curr.high > prev.high && curr.close < prev.high) {
+        const upperWick = curr.high - Math.max(curr.open, curr.close);
+        const body = Math.abs(curr.close - curr.open);
+        // Rejection wick should be meaningful (at least as large as body)
+        if (upperWick >= body * 0.5) {
+          return { found: true, rejectionLevel: curr.high, candleIndex: i };
+        }
       }
-      confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
-      
-      // Add modest confluence bonus for multiple Tier 1 patterns (ICT-style)
-      // +2% per additional Tier 1 pattern, capped at +6%
-      const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
-      if (tier1Patterns.length > 1) {
-        const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
-        confidence += confluenceBonus;
-        reasons.push(`🎯 Confluence: ${tier1Patterns.length} Tier 1 patterns (+${confluenceBonus}%)`);
-      }
-      
-      reasons.push(`📊 Data-driven confidence from ${patternsWithWinRates.length} patterns`);
     } else {
-      // Fallback: use base expected win rates if no DB stats
-      confidence = 52; // Conservative estimate based on Tier 1 patterns
-    }
-    
-  } else if (sellTier1Count >= 1 && sellScore >= SCORE_THRESHOLD && netSellAdvantage >= 0.5) {
-    signal = 'SELL';
-    reasons = sellPatterns.map(p => p.reason);
-    
-    // DATA-DRIVEN CONFIDENCE: Use actual win rates from pattern statistics
-    const patternsWithWinRates = sellPatterns.filter(p => p.actualWinRate !== undefined);
-    if (patternsWithWinRates.length > 0) {
-      let weightedSum = 0;
-      let totalWeight = 0;
-      for (const p of patternsWithWinRates) {
-        const weight = p.tier === 1 ? 2.0 : p.tier === 2 ? 1.0 : 0.5;
-        weightedSum += (p.actualWinRate || 50) * weight;
-        totalWeight += weight;
+      // Bullish rejection: swept previous low but closed above it
+      if (curr.low < prev.low && curr.close > prev.low) {
+        const lowerWick = Math.min(curr.open, curr.close) - curr.low;
+        const body = Math.abs(curr.close - curr.open);
+        if (lowerWick >= body * 0.5) {
+          return { found: true, rejectionLevel: curr.low, candleIndex: i };
+        }
       }
-      confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
-      
-      // Add modest confluence bonus for multiple Tier 1 patterns (ICT-style)
-      // +2% per additional Tier 1 pattern, capped at +6%
-      const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
-      if (tier1Patterns.length > 1) {
-        const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
-        confidence += confluenceBonus;
-        reasons.push(`🎯 Confluence: ${tier1Patterns.length} Tier 1 patterns (+${confluenceBonus}%)`);
-      }
-      
-      reasons.push(`📊 Data-driven confidence from ${patternsWithWinRates.length} patterns`);
-    } else {
-      confidence = 52; // Conservative estimate
     }
   }
-  
-  // If no Tier 1 pattern, log why we're rejecting
-  if (!signal) {
-    console.log(`[${symbol}] No signal: BUY T1=${buyTier1Count}, SELL T1=${sellTier1Count}, threshold=${SCORE_THRESHOLD}`);
-  }
-  
-  // Clamp confidence to realistic range (45-58% based on historical data)
-  confidence = Math.min(58, Math.max(45, confidence));
-  
-  return { signal, confidence, reasons, patternData: matchedPatternStats };
+
+  return { found: false, rejectionLevel: 0, candleIndex: -1 };
 }
 
-// Calculate ATR-based levels with 1:2.2 R:R (aligned with pattern statistics methodology)
-// 1:2.2 R:R aligns with how the original pattern statistics measured success
-// More achievable targets that can realistically be hit within the evaluation window
-function calculateLevels(
-  currentPrice: number, 
-  atr: number, 
-  signalType: 'BUY' | 'SELL',
-  confidence: number
-): { stopLoss: number; takeProfit1: number; takeProfit2: number; riskRewardRatio: string } {
-  // 1:2.2 R:R - Aligned with pattern statistics methodology
-  // SL = 1.0x ATR, TP1 = 2.2x ATR (1:2.2 R:R)
-  // TP2 = 3.0x ATR (extended target for runners)
-  
-  // Base multipliers for 1:2.2 R:R
-  let slMult = 1.0;
-  let tp1Mult = 2.2;
-  let tp2Mult = 3.0;
-  
-  // Confidence adjustments (now realistic 45-58% range)
-  if (confidence >= 55) {
-    slMult = 0.9;   // Slightly tighter stop for high-confidence signals
-    tp1Mult = 2.2;
-    tp2Mult = 3.0;
-  } else if (confidence >= 50) {
-    slMult = 1.0;   // Standard 1:2.2 R:R
-    tp1Mult = 2.2;
-    tp2Mult = 3.0;
-  } else {
-    // Lower confidence: slightly wider stop but maintain ratio
-    slMult = 1.1;
-    tp1Mult = 2.42;  // 1:2.2 R:R maintained
-    tp2Mult = 3.3;
+function detectHTFBias(weeklyCandles: Candle[], dailyCandles: Candle[], dailySR: { support: number[]; resistance: number[] }): HTFBias | null {
+  // Check weekly first for stronger bias
+  const weeklyBearish = detectCandleRejection(weeklyCandles, 'high', 3);
+  if (weeklyBearish.found) {
+    // Verify rejection is near a resistance level
+    const nearResistance = dailySR.resistance.some(r => Math.abs(weeklyBearish.rejectionLevel - r) / r < 0.005);
+    if (nearResistance || dailySR.resistance.length === 0) {
+      console.log(`  HTF Bias: BEARISH (Weekly rejection at ${weeklyBearish.rejectionLevel})`);
+      return {
+        bias: 'BEARISH',
+        rejectionLevel: weeklyBearish.rejectionLevel,
+        rejectionTimeframe: 'Weekly',
+        keyLevel: dailySR.resistance[0] || weeklyBearish.rejectionLevel,
+      };
+    }
   }
-  
-  const riskRewardRatio = `1:${(tp1Mult / slMult).toFixed(1)}`;
-  
-  console.log(`Calculating levels: confidence=${confidence}, R:R=${riskRewardRatio}, SL=${slMult}x ATR, TP1=${tp1Mult}x ATR`);
-  
-  if (signalType === 'BUY') {
+
+  const weeklyBullish = detectCandleRejection(weeklyCandles, 'low', 3);
+  if (weeklyBullish.found) {
+    const nearSupport = dailySR.support.some(s => Math.abs(weeklyBullish.rejectionLevel - s) / s < 0.005);
+    if (nearSupport || dailySR.support.length === 0) {
+      console.log(`  HTF Bias: BULLISH (Weekly rejection at ${weeklyBullish.rejectionLevel})`);
+      return {
+        bias: 'BULLISH',
+        rejectionLevel: weeklyBullish.rejectionLevel,
+        rejectionTimeframe: 'Weekly',
+        keyLevel: dailySR.support[0] || weeklyBullish.rejectionLevel,
+      };
+    }
+  }
+
+  // Fall back to daily
+  const dailyBearish = detectCandleRejection(dailyCandles, 'high', 5);
+  if (dailyBearish.found) {
+    console.log(`  HTF Bias: BEARISH (Daily rejection at ${dailyBearish.rejectionLevel})`);
     return {
-      stopLoss: currentPrice - (atr * slMult),
-      takeProfit1: currentPrice + (atr * tp1Mult),
-      takeProfit2: currentPrice + (atr * tp2Mult),
-      riskRewardRatio
+      bias: 'BEARISH',
+      rejectionLevel: dailyBearish.rejectionLevel,
+      rejectionTimeframe: 'Daily',
+      keyLevel: dailySR.resistance[0] || dailyBearish.rejectionLevel,
+    };
+  }
+
+  const dailyBullish = detectCandleRejection(dailyCandles, 'low', 5);
+  if (dailyBullish.found) {
+    console.log(`  HTF Bias: BULLISH (Daily rejection at ${dailyBullish.rejectionLevel})`);
+    return {
+      bias: 'BULLISH',
+      rejectionLevel: dailyBullish.rejectionLevel,
+      rejectionTimeframe: 'Daily',
+      keyLevel: dailySR.support[0] || dailyBullish.rejectionLevel,
+    };
+  }
+
+  return null;
+}
+
+// =====================================================================
+// Step B: H4 Candle Range Theory (CRT) Sweep Detection
+// =====================================================================
+interface H4Sweep {
+  swept: boolean;
+  h4RangeHigh: number;
+  h4RangeLow: number;
+  sweepCandle: Candle;
+  previousH4: Candle;
+}
+
+function detectH4Sweep(h4Candles: Candle[], bias: 'BULLISH' | 'BEARISH'): H4Sweep | null {
+  if (h4Candles.length < 3) return null;
+
+  // Previous closed H4 candle (second to last) defines the range
+  const prevH4 = h4Candles[h4Candles.length - 2];
+  const currentH4 = h4Candles[h4Candles.length - 1];
+
+  const h4RangeHigh = prevH4.high;
+  const h4RangeLow = prevH4.low;
+
+  if (bias === 'BEARISH') {
+    // For SELL: current H4 must sweep ABOVE previous H4 high
+    if (currentH4.high > h4RangeHigh) {
+      console.log(`  H4 Sweep: BEARISH confirmed (High ${currentH4.high} > Range High ${h4RangeHigh})`);
+      return { swept: true, h4RangeHigh, h4RangeLow, sweepCandle: currentH4, previousH4: prevH4 };
+    }
+    // Also check the candle before current (the sweep may have just completed)
+    if (h4Candles.length >= 4) {
+      const thirdH4 = h4Candles[h4Candles.length - 3];
+      const range2 = thirdH4;
+      if (prevH4.high > range2.high) {
+        console.log(`  H4 Sweep: BEARISH confirmed (prev H4 High ${prevH4.high} > Range High ${range2.high})`);
+        return { swept: true, h4RangeHigh: range2.high, h4RangeLow: range2.low, sweepCandle: prevH4, previousH4: range2 };
+      }
+    }
+  } else {
+    // For BUY: current H4 must sweep BELOW previous H4 low
+    if (currentH4.low < h4RangeLow) {
+      console.log(`  H4 Sweep: BULLISH confirmed (Low ${currentH4.low} < Range Low ${h4RangeLow})`);
+      return { swept: true, h4RangeHigh, h4RangeLow, sweepCandle: currentH4, previousH4: prevH4 };
+    }
+    if (h4Candles.length >= 4) {
+      const thirdH4 = h4Candles[h4Candles.length - 3];
+      const range2 = thirdH4;
+      if (prevH4.low < range2.low) {
+        console.log(`  H4 Sweep: BULLISH confirmed (prev H4 Low ${prevH4.low} < Range Low ${range2.low})`);
+        return { swept: true, h4RangeHigh: range2.high, h4RangeLow: range2.low, sweepCandle: prevH4, previousH4: range2 };
+      }
+    }
+  }
+
+  return null;
+}
+
+// =====================================================================
+// Step C: M15 Execution — MSNR Model 1 (BOS + Inducement)
+// =====================================================================
+interface M15Entry {
+  valid: boolean;
+  entryPrice: number;
+  stopLoss: number;
+  bosLevel: number;
+  inducementLevel: number | null;
+  sweepCandle: Candle;
+  hasInducement: boolean;
+}
+
+// Find M15 swing points using 2-bar lookback
+function findSwingPoints(candles: Candle[]): { swingHighs: { index: number; level: number }[]; swingLows: { index: number; level: number }[] } {
+  const swingHighs: { index: number; level: number }[] = [];
+  const swingLows: { index: number; level: number }[] = [];
+
+  for (let i = 2; i < candles.length - 2; i++) {
+    if (candles[i].high > candles[i - 1].high && candles[i].high > candles[i - 2].high &&
+        candles[i].high > candles[i + 1].high && candles[i].high > candles[i + 2].high) {
+      swingHighs.push({ index: i, level: candles[i].high });
+    }
+    if (candles[i].low < candles[i - 1].low && candles[i].low < candles[i - 2].low &&
+        candles[i].low < candles[i + 1].low && candles[i].low < candles[i + 2].low) {
+      swingLows.push({ index: i, level: candles[i].low });
+    }
+  }
+
+  return { swingHighs, swingLows };
+}
+
+function detectM15Entry(m15Candles: Candle[], bias: 'BULLISH' | 'BEARISH', h4Sweep: H4Sweep): M15Entry | null {
+  if (m15Candles.length < 10) return null;
+
+  const { swingHighs, swingLows } = findSwingPoints(m15Candles);
+
+  if (bias === 'BEARISH') {
+    // For SELL:
+    // 1. Find the M15 sweep candle (highest high near the H4 sweep zone)
+    let sweepCandleIdx = -1;
+    let sweepCandleHigh = 0;
+
+    for (let i = m15Candles.length - 1; i >= Math.max(0, m15Candles.length - 20); i--) {
+      if (m15Candles[i].high >= h4Sweep.h4RangeHigh) {
+        if (m15Candles[i].high > sweepCandleHigh) {
+          sweepCandleHigh = m15Candles[i].high;
+          sweepCandleIdx = i;
+        }
+      }
+    }
+
+    if (sweepCandleIdx === -1) {
+      // No M15 candle swept the H4 high — use the highest M15 candle in the last 10
+      for (let i = m15Candles.length - 1; i >= Math.max(0, m15Candles.length - 10); i--) {
+        if (m15Candles[i].high > sweepCandleHigh) {
+          sweepCandleHigh = m15Candles[i].high;
+          sweepCandleIdx = i;
+        }
+      }
+    }
+
+    if (sweepCandleIdx === -1) return null;
+
+    // 2. Detect BOS: most recent M15 swing low broken downward AFTER the sweep candle
+    const recentSwingLows = swingLows.filter(s => s.index < sweepCandleIdx);
+    if (recentSwingLows.length === 0) return null;
+
+    const targetSwingLow = recentSwingLows[recentSwingLows.length - 1];
+
+    // Check if any candle AFTER the sweep broke below this swing low
+    let bosConfirmed = false;
+    for (let i = sweepCandleIdx + 1; i < m15Candles.length; i++) {
+      if (m15Candles[i].close < targetSwingLow.level) {
+        bosConfirmed = true;
+        break;
+      }
+    }
+
+    // Also check if the current price (last candle close) is below the swing low
+    if (!bosConfirmed && m15Candles[m15Candles.length - 1].close < targetSwingLow.level) {
+      bosConfirmed = true;
+    }
+
+    if (!bosConfirmed) return null;
+
+    // 3. Detect Inducement: minor internal peak between sweep and BOS
+    let inducementLevel: number | null = null;
+    const minorPeaks = swingHighs.filter(s => s.index > targetSwingLow.index && s.index < sweepCandleIdx && s.level < sweepCandleHigh);
+    if (minorPeaks.length > 0) {
+      inducementLevel = minorPeaks[minorPeaks.length - 1].level;
+    }
+
+    const sweepCandle = m15Candles[sweepCandleIdx];
+    const entryPrice = Math.max(sweepCandle.open, sweepCandle.close); // Strong high (body high)
+    const stopLoss = sweepCandle.high; // Above the wick
+
+    console.log(`  M15 SELL Entry: entry=${entryPrice}, SL=${stopLoss}, BOS at ${targetSwingLow.level}, Inducement=${inducementLevel || 'none'}`);
+
+    return {
+      valid: true,
+      entryPrice,
+      stopLoss,
+      bosLevel: targetSwingLow.level,
+      inducementLevel,
+      sweepCandle,
+      hasInducement: inducementLevel !== null,
     };
   } else {
+    // For BUY:
+    // 1. Find the M15 sweep candle (lowest low near the H4 sweep zone)
+    let sweepCandleIdx = -1;
+    let sweepCandleLow = Infinity;
+
+    for (let i = m15Candles.length - 1; i >= Math.max(0, m15Candles.length - 20); i--) {
+      if (m15Candles[i].low <= h4Sweep.h4RangeLow) {
+        if (m15Candles[i].low < sweepCandleLow) {
+          sweepCandleLow = m15Candles[i].low;
+          sweepCandleIdx = i;
+        }
+      }
+    }
+
+    if (sweepCandleIdx === -1) {
+      for (let i = m15Candles.length - 1; i >= Math.max(0, m15Candles.length - 10); i--) {
+        if (m15Candles[i].low < sweepCandleLow) {
+          sweepCandleLow = m15Candles[i].low;
+          sweepCandleIdx = i;
+        }
+      }
+    }
+
+    if (sweepCandleIdx === -1) return null;
+
+    // 2. Detect BOS: most recent M15 swing high broken upward AFTER the sweep
+    const recentSwingHighs = swingHighs.filter(s => s.index < sweepCandleIdx);
+    if (recentSwingHighs.length === 0) return null;
+
+    const targetSwingHigh = recentSwingHighs[recentSwingHighs.length - 1];
+
+    let bosConfirmed = false;
+    for (let i = sweepCandleIdx + 1; i < m15Candles.length; i++) {
+      if (m15Candles[i].close > targetSwingHigh.level) {
+        bosConfirmed = true;
+        break;
+      }
+    }
+
+    if (!bosConfirmed && m15Candles[m15Candles.length - 1].close > targetSwingHigh.level) {
+      bosConfirmed = true;
+    }
+
+    if (!bosConfirmed) return null;
+
+    // 3. Detect Inducement: minor internal trough between sweep and BOS
+    let inducementLevel: number | null = null;
+    const minorTroughs = swingLows.filter(s => s.index > targetSwingHigh.index && s.index < sweepCandleIdx && s.level > sweepCandleLow);
+    if (minorTroughs.length > 0) {
+      inducementLevel = minorTroughs[minorTroughs.length - 1].level;
+    }
+
+    const sweepCandle = m15Candles[sweepCandleIdx];
+    const entryPrice = Math.min(sweepCandle.open, sweepCandle.close); // Strong low (body low)
+    const stopLoss = sweepCandle.low; // Below the wick
+
+    console.log(`  M15 BUY Entry: entry=${entryPrice}, SL=${stopLoss}, BOS at ${targetSwingHigh.level}, Inducement=${inducementLevel || 'none'}`);
+
     return {
-      stopLoss: currentPrice + (atr * slMult),
-      takeProfit1: currentPrice - (atr * tp1Mult),
-      takeProfit2: currentPrice - (atr * tp2Mult),
-      riskRewardRatio
+      valid: true,
+      entryPrice,
+      stopLoss,
+      bosLevel: targetSwingHigh.level,
+      inducementLevel,
+      sweepCandle,
+      hasInducement: inducementLevel !== null,
     };
   }
 }
 
-// Scan a single symbol for opportunities
+// =====================================================================
+// CRT + MSNR Confidence Scoring
+// =====================================================================
+function calculateCRTConfidence(
+  htfBias: HTFBias,
+  h4Sweep: H4Sweep,
+  m15Entry: M15Entry,
+  dailySR: { support: number[]; resistance: number[] }
+): number {
+  let confidence = 40; // Base
+
+  // Weekly rejection is stronger than Daily
+  if (htfBias.rejectionTimeframe === 'Weekly') {
+    confidence += 15;
+  } else {
+    confidence += 10;
+  }
+
+  // H4 sweep confirmed (always true if we reach here)
+  confidence += 20;
+
+  // M15 BOS confirmed (always true if we reach here)
+  confidence += 20;
+
+  // M15 Inducement found
+  if (m15Entry.hasInducement) {
+    confidence += 10;
+  }
+
+  // Rejection at a key S/R level
+  const allLevels = [...dailySR.support, ...dailySR.resistance];
+  const nearKeyLevel = allLevels.some(l => Math.abs(htfBias.rejectionLevel - l) / l < 0.003);
+  if (nearKeyLevel) {
+    confidence += 10;
+  }
+
+  return Math.min(85, confidence);
+}
+
+// =====================================================================
+// Main CRT Analyzer — orchestrates all 3 steps
+// =====================================================================
+interface CRTSignal {
+  signal: 'BUY' | 'SELL';
+  confidence: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number | null;
+  reasoning: string;
+  patternsDetected: string[];
+  technicalData: any;
+}
+
+async function analyzeCRT(supabase: any, symbol: string): Promise<CRTSignal | null> {
+  console.log(`[${symbol}] === CRT + MSNR Analysis ===`);
+
+  // Step 0: Ensure all required timeframe data is cached
+  // Process sequentially with small delays to avoid rate-limiting
+  await ensureTimeframeData(supabase, symbol, '1d');
+  await ensureTimeframeData(supabase, symbol, '4h');
+  await ensureTimeframeData(supabase, symbol, '15min');
+
+  // Read cached candles
+  const [dailyCandles, h4Candles, m15Candles] = await Promise.all([
+    readCandles(supabase, symbol, '1d', 200),
+    readCandles(supabase, symbol, '4h', 200),
+    readCandles(supabase, symbol, '15min', 200),
+  ]);
+
+  console.log(`[${symbol}] Data: Daily=${dailyCandles.length}, H4=${h4Candles.length}, M15=${m15Candles.length}`);
+
+  if (dailyCandles.length < 10 || h4Candles.length < 5 || m15Candles.length < 10) {
+    console.log(`[${symbol}] Insufficient data for CRT analysis`);
+    return null;
+  }
+
+  // Aggregate weekly candles from daily
+  const weeklyCandles = aggregateWeeklyCandles(dailyCandles);
+  console.log(`[${symbol}] Weekly candles aggregated: ${weeklyCandles.length}`);
+
+  // Calculate Daily S/R levels for bias validation
+  const dailySR = calculateSR(dailyCandles);
+  console.log(`[${symbol}] Daily S/R: ${dailySR.support.length} supports, ${dailySR.resistance.length} resistances`);
+
+  // ---- Step A: HTF Bias ----
+  const htfBias = detectHTFBias(weeklyCandles, dailyCandles, dailySR);
+  if (!htfBias) {
+    console.log(`[${symbol}] Step A FAILED: No HTF bias detected — skipping`);
+    return null;
+  }
+  console.log(`[${symbol}] Step A PASS: ${htfBias.bias} bias (${htfBias.rejectionTimeframe} rejection at ${htfBias.rejectionLevel})`);
+
+  // ---- Step B: H4 CRT Sweep ----
+  const h4Sweep = detectH4Sweep(h4Candles, htfBias.bias);
+  if (!h4Sweep) {
+    console.log(`[${symbol}] Step B FAILED: No H4 sweep detected — skipping`);
+    return null;
+  }
+  console.log(`[${symbol}] Step B PASS: H4 Range ${h4Sweep.h4RangeLow} - ${h4Sweep.h4RangeHigh}`);
+
+  // ---- Step C: M15 MSNR Entry ----
+  const m15Entry = detectM15Entry(m15Candles, htfBias.bias, h4Sweep);
+  if (!m15Entry || !m15Entry.valid) {
+    console.log(`[${symbol}] Step C FAILED: No M15 BOS entry — skipping`);
+    return null;
+  }
+  console.log(`[${symbol}] Step C PASS: Entry=${m15Entry.entryPrice}, SL=${m15Entry.stopLoss}, BOS=${m15Entry.bosLevel}`);
+
+  // ---- Signal Construction ----
+  const signalType: 'BUY' | 'SELL' = htfBias.bias === 'BULLISH' ? 'BUY' : 'SELL';
+  const confidence = calculateCRTConfidence(htfBias, h4Sweep, m15Entry, dailySR);
+
+  // TP = opposite side of H4 range
+  const takeProfit1 = signalType === 'SELL' ? h4Sweep.h4RangeLow : h4Sweep.h4RangeHigh;
+
+  // Build reasoning string for Telegram
+  const currentPrice = m15Candles[m15Candles.length - 1].close;
+  const reasoning =
+    `${signalType} opportunity detected on ${symbol} with ${confidence}% confidence.\n\n` +
+    `Bias: ${htfBias.bias} (${htfBias.rejectionTimeframe} resistance rejection at ${htfBias.rejectionLevel.toFixed(5)})\n` +
+    `Setup: H4 Candle Range Sweep Confirmed (H4 ${signalType === 'SELL' ? 'High' : 'Low'} ${signalType === 'SELL' ? h4Sweep.h4RangeHigh.toFixed(5) : h4Sweep.h4RangeLow.toFixed(5)} swept)\n` +
+    `Entry Model: MSNR Model 1 (BOS + ${m15Entry.hasInducement ? 'Inducement' : 'No Inducement'})\n\n` +
+    `H4 Range: ${h4Sweep.h4RangeLow.toFixed(5)} - ${h4Sweep.h4RangeHigh.toFixed(5)}\n` +
+    `M15 BOS at: ${m15Entry.bosLevel.toFixed(5)}\n` +
+    (m15Entry.inducementLevel ? `Inducement: ${m15Entry.inducementLevel.toFixed(5)}\n` : '') +
+    `Current Price: ${currentPrice.toFixed(5)}`;
+
+  const patternsDetected = [
+    `${htfBias.rejectionTimeframe} ${htfBias.bias} Rejection`,
+    'H4 CRT Sweep',
+    'M15 BOS',
+    ...(m15Entry.hasInducement ? ['M15 Inducement'] : []),
+  ];
+
+  return {
+    signal: signalType,
+    confidence,
+    entryPrice: m15Entry.entryPrice,
+    stopLoss: m15Entry.stopLoss,
+    takeProfit1,
+    takeProfit2: null, // CRT uses single TP at opposite range
+    reasoning,
+    patternsDetected,
+    technicalData: {
+      htfBias,
+      h4Sweep: { h4RangeHigh: h4Sweep.h4RangeHigh, h4RangeLow: h4Sweep.h4RangeLow },
+      m15Entry: { bosLevel: m15Entry.bosLevel, inducementLevel: m15Entry.inducementLevel },
+      dailySR,
+    },
+  };
+}
+
+// =====================================================================
+// Scan a single symbol for CRT + MSNR opportunities
+// =====================================================================
 async function scanSymbol(
   supabase: any,
   symbol: string,
-  patternStats: any[]
 ): Promise<{ success: boolean; opportunity?: any; message: string }> {
   console.log(`\n========== Scanning ${symbol} ==========`);
-  
-  // Fetch price data from cache
-  const { data: priceData, error: priceError } = await supabase
-    .from('price_history')
-    .select('*')
-    .eq('symbol', symbol)
-    .eq('timeframe', '1h')
-    .order('timestamp', { ascending: true })
-    .limit(200);
 
-  if (priceError || !priceData || priceData.length < 50) {
-    console.log(`[${symbol}] Not enough price data: ${priceError?.message || `Only ${priceData?.length || 0} candles`}`);
-    return { success: false, message: `Not enough price data for ${symbol}` };
+  // Run the CRT + MSNR analysis
+  const analysis = await analyzeCRT(supabase, symbol);
+
+  if (!analysis) {
+    return { success: true, message: `No CRT+MSNR setup for ${symbol}` };
   }
 
-  console.log(`[${symbol}] Analyzing ${priceData.length} candles...`);
-
-  // Transform to candle format
-  const candles: Candle[] = priceData.map((p: any) => ({
-    timestamp: p.timestamp,
-    open: Number(p.open),
-    high: Number(p.high),
-    low: Number(p.low),
-    close: Number(p.close),
-    volume: p.volume ? Number(p.volume) : undefined
-  }));
-
-  const currentPrice = candles[candles.length - 1].close;
-  
-  // Calculate indicators and detect patterns
-  const indicators = calculateIndicators(candles);
-  const patterns = detectPatterns(candles);
-  
-  console.log(`[${symbol}] Indicators:`, JSON.stringify({
-    rsi: indicators.rsi.toFixed(2),
-    macd: indicators.macd.histogram.toFixed(5),
-    stochastic: indicators.stochastic.k.toFixed(2)
-  }));
-  console.log(`[${symbol}] Patterns:`, patterns);
-
-  // Analyze for opportunity
-  const analysis = analyzeOpportunity(indicators, patterns, currentPrice, patternStats, symbol);
-  
-  console.log(`[${symbol}] Analysis result:`, {
-    signal: analysis.signal,
-    confidence: analysis.confidence,
-    reasons: analysis.reasons.length
-  });
-
-  // Only create opportunity if conditions are met
-  // Threshold lowered to 50% to allow signals from Tier 1 patterns (>50% win rate)
-  if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2) {
-    console.log(`[${symbol}] No high-probability opportunity detected`);
-    return { 
-      success: true, 
-      message: `No high-probability opportunity for ${symbol}`
-    };
-  }
+  const currentPrice = analysis.entryPrice;
 
   // Check for conflicting active signals (opposite direction)
   const oppositeSignal = analysis.signal === 'BUY' ? 'SELL' : 'BUY';
@@ -898,16 +719,11 @@ async function scanSymbol(
     const conflictAge = Date.now() - new Date(mostRecentConflict.created_at).getTime();
     const oneHourMs = 60 * 60 * 1000;
 
-    // Cooldown: require 1 hour OR 10%+ higher confidence to reverse
     if (conflictAge < oneHourMs && analysis.confidence < mostRecentConflict.confidence + 10) {
-      console.log(`[${symbol}] Cooldown active: ${oppositeSignal} signal from ${mostRecentConflict.created_at} is less than 1 hour old`);
-      return { 
-        success: true, 
-        message: `Cooldown active for ${symbol}`
-      };
+      console.log(`[${symbol}] Cooldown active: ${oppositeSignal} signal is less than 1 hour old`);
+      return { success: true, message: `Cooldown active for ${symbol}` };
     }
 
-    // Expire conflicting signals
     console.log(`[${symbol}] Expiring ${conflictingOpps.length} conflicting ${oppositeSignal} signal(s) due to reversal`);
     await supabase
       .from('trading_opportunities')
@@ -920,7 +736,7 @@ async function scanSymbol(
     previousSignal = {
       signal_type: mostRecentConflict.signal_type,
       confidence: mostRecentConflict.confidence,
-      created_at: mostRecentConflict.created_at
+      created_at: mostRecentConflict.created_at,
     };
   }
 
@@ -933,34 +749,18 @@ async function scanSymbol(
     .gte('created_at', new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString());
 
   if (recentOpps && recentOpps.length > 0) {
-    // Check if price has moved significantly (at least 15 pips)
     const mostRecent = recentOpps[0];
     const priceDiff = Math.abs(currentPrice - mostRecent.entry_price);
     const pipValue = getPipValue(symbol);
     const pipsDiff = priceDiff / pipValue;
-    
+
     if (pipsDiff < 15) {
       console.log(`[${symbol}] Similar opportunity exists (${pipsDiff.toFixed(1)} pips difference, need 15+)`);
-      return { 
-        success: true, 
-        message: `Similar ${analysis.signal} opportunity exists for ${symbol}`
-      };
+      return { success: true, message: `Similar ${analysis.signal} opportunity exists for ${symbol}` };
     }
-    
-    console.log(`[${symbol}] Price moved ${pipsDiff.toFixed(1)} pips since last ${analysis.signal} signal - creating new opportunity`);
+
+    console.log(`[${symbol}] Price moved ${pipsDiff.toFixed(1)} pips since last ${analysis.signal} signal — creating new opportunity`);
   }
-
-  // Calculate entry levels with dynamic R:R based on confidence
-  const levels = calculateLevels(currentPrice, indicators.atr, analysis.signal, analysis.confidence);
-
-  // Build reasoning
-  const reasoning = `${analysis.signal} opportunity detected on ${symbol} with ${analysis.confidence.toFixed(0)}% confidence.\n\n` +
-    `Confirming factors:\n${analysis.reasons.map(r => `• ${r}`).join('\n')}\n\n` +
-    `Technical snapshot:\n` +
-    `• RSI: ${indicators.rsi.toFixed(1)}\n` +
-    `• MACD Histogram: ${indicators.macd.histogram > 0 ? '+' : ''}${indicators.macd.histogram.toFixed(5)}\n` +
-    `• Stochastic %K: ${indicators.stochastic.k.toFixed(1)}\n` +
-    `• ATR: ${indicators.atr.toFixed(5)}`;
 
   // Insert opportunity
   const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4 hours
@@ -971,17 +771,17 @@ async function scanSymbol(
       symbol,
       signal_type: analysis.signal,
       confidence: analysis.confidence,
-      entry_price: currentPrice,
+      entry_price: analysis.entryPrice,
       current_price: currentPrice,
-      stop_loss: levels.stopLoss,
-      take_profit_1: levels.takeProfit1,
-      take_profit_2: levels.takeProfit2,
-      patterns_detected: patterns,
-      technical_indicators: indicators,
-      pattern_stats: analysis.patternData,
-      reasoning,
+      stop_loss: analysis.stopLoss,
+      take_profit_1: analysis.takeProfit1,
+      take_profit_2: analysis.takeProfit2,
+      patterns_detected: analysis.patternsDetected,
+      technical_indicators: analysis.technicalData,
+      pattern_stats: null,
+      reasoning: analysis.reasoning,
       status: 'ACTIVE',
-      expires_at: expiresAt.toISOString()
+      expires_at: expiresAt.toISOString(),
     })
     .select()
     .single();
@@ -991,13 +791,13 @@ async function scanSymbol(
     return { success: false, message: `Failed to save opportunity for ${symbol}` };
   }
 
-  console.log(`[${symbol}] Created new opportunity:`, newOpp.id);
+  console.log(`[${symbol}] Created new CRT opportunity:`, newOpp.id);
 
-  // Send Telegram notification for new opportunity
+  // Send Telegram notification
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-    
+
     await fetch(`${supabaseUrl}/functions/v1/send-telegram-notification`, {
       method: 'POST',
       headers: {
@@ -1022,29 +822,30 @@ async function scanSymbol(
     console.error(`[${symbol}] Failed to send Telegram notification:`, notifyError);
   }
 
-  return { 
-    success: true, 
+  return {
+    success: true,
     opportunity: newOpp,
-    message: `New ${analysis.signal} opportunity for ${symbol}!`
+    message: `New ${analysis.signal} CRT opportunity for ${symbol}!`,
   };
 }
 
+// =====================================================================
+// Main serve handler
+// =====================================================================
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    console.log("Starting multi-currency opportunity scan...");
-    
-    // Initialize Supabase first (needed for fetching active pairs)
+    console.log("Starting CRT + MSNR opportunity scan...");
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
-    
-    // Parse request body for optional symbol filter
+
     const body = await req.json().catch(() => ({}));
-    
+
     // Get active pairs from database or use provided symbols
     let requestedSymbols: string[];
     if (body?.symbols) {
@@ -1052,10 +853,9 @@ serve(async (req) => {
     } else if (body?.symbol) {
       requestedSymbols = [body.symbol];
     } else {
-      // Fetch from database
       const activePairs = await getActiveCurrencyPairs(supabase);
       requestedSymbols = activePairs.map(p => p.symbol);
-      
+
       if (requestedSymbols.length === 0) {
         console.log("No active currency pairs found in database");
         return new Response(
@@ -1064,7 +864,7 @@ serve(async (req) => {
         );
       }
     }
-    
+
     // Check market status
     const marketStatus = isForexMarketOpen();
     if (!marketStatus.isOpen) {
@@ -1082,41 +882,35 @@ serve(async (req) => {
       .eq('status', 'ACTIVE')
       .lt('expires_at', new Date().toISOString());
 
-    // Fetch pattern statistics (all symbols)
-    const { data: patternStats } = await supabase
-      .from('pattern_statistics')
-      .select('*');
-
     // Scan each symbol
     const results: { symbol: string; opportunity?: any; message: string }[] = [];
     const newOpportunities: any[] = [];
-    
+
     for (const symbol of requestedSymbols) {
-      const result = await scanSymbol(supabase, symbol, patternStats || []);
+      const result = await scanSymbol(supabase, symbol);
       results.push({ symbol, ...result });
       if (result.opportunity) {
         newOpportunities.push(result.opportunity);
       }
     }
 
-    console.log(`\n========== Scan Complete ==========`);
+    console.log(`\n========== CRT Scan Complete ==========`);
     console.log(`Scanned ${requestedSymbols.length} pairs, found ${newOpportunities.length} opportunities`);
 
     return new Response(
-      JSON.stringify({ 
-        success: true, 
-        message: newOpportunities.length > 0 
-          ? `Found ${newOpportunities.length} new opportunity(ies)!` 
-          : "No high-probability opportunities detected",
+      JSON.stringify({
+        success: true,
+        message: newOpportunities.length > 0
+          ? `Found ${newOpportunities.length} new CRT opportunity(ies)!`
+          : "No CRT+MSNR setups detected",
         scanned: true,
         symbolsScanned: requestedSymbols.length,
         opportunitiesFound: newOpportunities.length,
         opportunities: newOpportunities,
-        results
+        results,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-
   } catch (error) {
     console.error("Scan error:", error);
     return new Response(
