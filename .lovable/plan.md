@@ -1,86 +1,47 @@
 
-# Fix: Unblock Signals & Ensure Telegram Delivery
 
-## Root Cause
+# Fix Signal Pipeline + Data Reset
 
-The Telegram notification code (lines 976-1002) is correctly implemented but **never executes** because all signals are blocked earlier at line 855:
+## Issues Found
 
-```typescript
-if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
-  console.log(`[${symbol}] No high-probability opportunity detected`);
-  return; // ← Telegram code never reached
-}
+1. **Status constraint blocks evaluation (CRITICAL)**: `trading_opportunities_status_check` only allows `ACTIVE`, `EXPIRED`, `TRIGGERED`. The `evaluate-opportunities` function tries to set `COMPLETED` and `CLOSED`, causing a constraint violation on every evaluation — so no WIN/LOSS outcomes are ever recorded, and no outcome Telegram notifications are sent.
+
+2. **Telegram signal notification silently fails**: In `scan-opportunities/index.ts` line 801, the `fetch()` response body is never consumed. In Deno edge runtime, this can cause the request to hang or silently fail. The `notification_sent_at` is also never updated after sending.
+
+3. **API credit exhaustion**: The `15min` cache freshness is only 110 seconds, causing excessive API calls. With 12 pairs × 3 timeframes, credits burn out fast.
+
+4. **Data reset needed**: 1,203 old trading_opportunities, 3 predictions, and 618 prediction_learnings need to be cleared for the fresh start.
+
+## Fixes
+
+### Fix 1: Database Migration — Update Status Constraint
+```sql
+ALTER TABLE trading_opportunities DROP CONSTRAINT trading_opportunities_status_check;
+ALTER TABLE trading_opportunities ADD CONSTRAINT trading_opportunities_status_check 
+  CHECK (status IN ('ACTIVE', 'EXPIRED', 'TRIGGERED', 'COMPLETED', 'CLOSED'));
 ```
 
-With the recent fix making confidence scores realistic (max ~58%), this threshold blocks 100% of valid signals.
+### Fix 2: `scan-opportunities/index.ts` — Fix Telegram Call (lines 801-823)
+- Consume the response body with `await resp.text()`
+- Log the response status
+- Update `notification_sent_at` on success
 
-## Solution: Two Changes
+### Fix 3: `fetch-forex-data/index.ts` — Increase 15min Cache Freshness (line 116)
+Change `"15min": 110_000` to `"15min": 240_000` (4 minutes instead of ~2 minutes)
 
-### Change 1: Lower Confidence Threshold (Critical)
-
-**File**: `supabase/functions/scan-opportunities/index.ts`  
-**Line 855**
-
-```typescript
-// FROM:
-if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2)
-
-// TO:
-if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2)
+### Fix 4: Data Reset — Delete Historical Records
+Using the insert tool:
+```sql
+DELETE FROM prediction_learnings;
+DELETE FROM trading_opportunities;
+DELETE FROM predictions;
 ```
 
-### Change 2: Add Modest Confluence Bonus
+## Files Modified
+| File | Change |
+|------|--------|
+| Database migration | Add COMPLETED/CLOSED to status constraint |
+| `supabase/functions/scan-opportunities/index.ts` | Consume Telegram response, update notification_sent_at |
+| `supabase/functions/fetch-forex-data/index.ts` | 15min cache freshness → 240s |
+| Database (data delete) | Clear predictions, prediction_learnings, trading_opportunities |
 
-Restore the trading concept that multiple confirmations = better setup, but with conservative values.
-
-**Location**: Around lines 695-710 (after weighted average calculation)
-
-```typescript
-// After calculating base confidence from weighted average:
-let confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
-
-// Add modest confluence bonus for multiple Tier 1 patterns
-const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
-if (tier1Patterns.length > 1) {
-  const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
-  confidence += confluenceBonus;
-  reasons.push(`🎯 Confluence: ${tier1Patterns.length} confirming patterns (+${confluenceBonus}%)`);
-}
-
-// Cap at reasonable maximum
-confidence = Math.min(58, Math.max(45, confidence));
-```
-
-## Expected Signal Flow After Fix
-
-```text
-Pattern Detection → Confidence Calculation (50-58%)
-        ↓
-Threshold Check (>= 50%) ✅ PASSES
-        ↓
-Insert to Database ✅
-        ↓
-Send Telegram Notification ✅ ← NOW REACHED
-```
-
-## Confidence Examples After Fix
-
-| Setup | Base Win Rate | Confluence | Final Confidence |
-|-------|---------------|------------|------------------|
-| 1 Tier 1 pattern | 52% | +0% | 52% |
-| 2 Tier 1 patterns | 52% | +2% | 54% |
-| 3 Tier 1 patterns | 52% | +4% | 56% |
-| 4 Tier 1 patterns | 52% | +6% (cap) | 58% |
-
-## Files to Modify
-
-| File | Changes |
-|------|---------|
-| `supabase/functions/scan-opportunities/index.ts` | Lower threshold to 50%, add +2%/pattern confluence bonus (capped at +6%) |
-
-## Verification Steps
-
-After deployment:
-1. Check edge function logs for "Created new opportunity" messages
-2. Check logs for "Telegram notification sent" messages
-3. Confirm signal appears in Telegram channel
