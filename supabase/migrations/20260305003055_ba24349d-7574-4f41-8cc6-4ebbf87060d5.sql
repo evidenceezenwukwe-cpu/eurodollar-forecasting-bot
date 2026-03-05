@@ -1,0 +1,2 @@
+ALTER TABLE trading_opportunities DROP CONSTRAINT IF EXISTS trading_opportunities_status_check;
+ALTER TABLE trading_opportunities ADD CONSTRAINT trading_opportunities_status_check CHECK (status IN ('ACTIVE', 'EXPIRED', 'TRIGGERED', 'COMPLETED', 'CLOSED'));

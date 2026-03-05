@@ -113,7 +113,7 @@ function cacheFreshnessMs(timeframe: string) {
   const ms: Record<string, number> = {
     "1min": 20_000,
     "5min": 55_000,
-    "15min": 110_000,
+    "15min": 240_000,
     "30min": 170_000,
     "1h": 600_000,
     "4h": 1_800_000,

@@ -798,7 +798,7 @@ async function scanSymbol(
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-    await fetch(`${supabaseUrl}/functions/v1/send-telegram-notification`, {
+    const telegramResp = await fetch(`${supabaseUrl}/functions/v1/send-telegram-notification`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -817,7 +817,19 @@ async function scanSymbol(
         previous_signal: previousSignal,
       }),
     });
-    console.log(`[${symbol}] Telegram notification sent for opportunity:`, newOpp.id, isSignalReversal ? "(REVERSAL)" : "");
+    const telegramBody = await telegramResp.text();
+    console.log(`[${symbol}] Telegram response (${telegramResp.status}):`, telegramBody);
+    
+    if (telegramResp.ok) {
+      // Update notification_sent_at
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+      const adminClient = createClient(supabaseUrl, serviceKey);
+      await adminClient.from('trading_opportunities').update({ notification_sent_at: new Date().toISOString() }).eq('id', newOpp.id);
+      console.log(`[${symbol}] Telegram notification sent for opportunity:`, newOpp.id, isSignalReversal ? "(REVERSAL)" : "");
+    } else {
+      console.error(`[${symbol}] Telegram notification failed (${telegramResp.status}):`, telegramBody);
+    }
   } catch (notifyError) {
     console.error(`[${symbol}] Failed to send Telegram notification:`, notifyError);
   }
