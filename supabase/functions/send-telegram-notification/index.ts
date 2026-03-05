@@ -66,10 +66,10 @@ ${reversalHeader}${emoji} *NEW ${opportunity.signal_type} SIGNAL* ${arrow}
 📊 *${symbol}*
 💯 Confidence: ${opportunity.confidence.toFixed(0)}%
 
-📍 Entry: ${opportunity.entry_price.toFixed(5)}
-🛑 Stop Loss: ${opportunity.stop_loss.toFixed(5)}
-🎯 TP1: ${opportunity.take_profit_1.toFixed(5)}
-🎯 TP2: ${opportunity.take_profit_2.toFixed(5)}
+📍 Entry: ${opportunity.entry_price?.toFixed(5) || 'N/A'}
+🛑 Stop Loss: ${opportunity.stop_loss?.toFixed(5) || 'N/A'}
+🎯 TP1: ${opportunity.take_profit_1?.toFixed(5) || 'N/A'}
+🎯 TP2: ${opportunity.take_profit_2?.toFixed(5) || 'N/A'}
 
 📝 ${opportunity.reasoning?.split('\n')[0] || 'Technical signal detected'}
 
