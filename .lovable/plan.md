@@ -1,55 +1,86 @@
 
+# Fix: Unblock Signals & Ensure Telegram Delivery
 
-# Fix Plan: Stop Loss Buffer, Outcome Notifications, Daily Report
+## Root Cause
 
-## Issue 1: Stop Losses Too Tight
+The Telegram notification code (lines 976-1002) is correctly implemented but **never executes** because all signals are blocked earlier at line 855:
 
-**Root cause**: In `scan-opportunities/index.ts`, the SL is set to exactly the M15 sweep candle wick (line 450 for SELL: `sweepCandle.high`, line 518 for BUY: `sweepCandle.low`). The entry is the body edge of the same candle. This means the SL distance is just the wick length of a single M15 candle — often only 2-5 pips, far too tight for any trade to breathe.
+```typescript
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
+  console.log(`[${symbol}] No high-probability opportunity detected`);
+  return; // ← Telegram code never reached
+}
+```
 
-**Fix**: Add a pip-based buffer beyond the wick. For each symbol, add `bufferPips * pipValue` beyond the wick:
-- SELL SL: `sweepCandle.high + (5 * pipValue)` (5 pips above the wick)
-- BUY SL: `sweepCandle.low - (5 * pipValue)` (5 pips below the wick)
+With the recent fix making confidence scores realistic (max ~58%), this threshold blocks 100% of valid signals.
 
-This gives the trade room to breathe while still being structurally anchored. The buffer accounts for spread + minor noise.
+## Solution: Two Changes
 
-**Files**: `supabase/functions/scan-opportunities/index.ts` (lines 448-451 and 516-518 only)
+### Change 1: Lower Confidence Threshold (Critical)
 
----
+**File**: `supabase/functions/scan-opportunities/index.ts`  
+**Line 855**
 
-## Issue 2: Outcome Results Not Sent to Telegram
+```typescript
+// FROM:
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2)
 
-**Root cause**: The `evaluate-opportunities` function queries `price_history` with `timeframe = '1h'` (line 300), but no function ever caches 1h data. The scan function only caches `1d`, `4h`, and `15min`. So `priceHistory` is always empty, the function logs "No price history for opportunity" and skips every evaluation. No outcomes are ever determined, so no outcome notifications are ever sent.
+// TO:
+if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2)
+```
 
-**Fix**: Change the price_history query in `evaluate-opportunities/index.ts` from `timeframe = '1h'` to `timeframe = '15min'` (line 300). The 15min data is cached by the scan function and provides more granular SL/TP hit detection.
+### Change 2: Add Modest Confluence Bonus
 
-**Files**: `supabase/functions/evaluate-opportunities/index.ts` (line 300 only)
+Restore the trading concept that multiple confirmations = better setup, but with conservative values.
 
----
+**Location**: Around lines 695-710 (after weighted average calculation)
 
-## Issue 3: Daily Performance Report at 23:00 UTC
+```typescript
+// After calculating base confidence from weighted average:
+let confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
 
-**What**: Create a new edge function `send-daily-report` that queries all opportunities resolved that day, tallies WINs, LOSSEs, and EXPIREDs, and sends a summary message to the Telegram group.
+// Add modest confluence bonus for multiple Tier 1 patterns
+const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
+if (tier1Patterns.length > 1) {
+  const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
+  confidence += confluenceBonus;
+  reasons.push(`🎯 Confluence: ${tier1Patterns.length} confirming patterns (+${confluenceBonus}%)`);
+}
 
-**Implementation**:
-- New file: `supabase/functions/send-daily-report/index.ts`
-- Query `trading_opportunities` where `evaluated_at` is today and `outcome` is not null
-- Calculate: total signals, wins, losses, expired, win rate, total pips gained/lost
-- Format and send a Telegram message via the existing `send-telegram-notification` function (or directly via Telegram API since the report format is unique)
-- Add to `supabase/config.toml` with `verify_jwt = false`
-- This function would be triggered by a cron job at 23:00 UTC daily
+// Cap at reasonable maximum
+confidence = Math.min(58, Math.max(45, confidence));
+```
 
-**Files**:
-- `supabase/functions/send-daily-report/index.ts` (new)
-- `supabase/config.toml` (add function config)
+## Expected Signal Flow After Fix
 
----
+```text
+Pattern Detection → Confidence Calculation (50-58%)
+        ↓
+Threshold Check (>= 50%) ✅ PASSES
+        ↓
+Insert to Database ✅
+        ↓
+Send Telegram Notification ✅ ← NOW REACHED
+```
 
-## Summary of Changes
+## Confidence Examples After Fix
 
-| File | Change |
-|------|--------|
-| `scan-opportunities/index.ts` | Add 5-pip buffer to SL beyond M15 wick (lines 450, 518) |
-| `evaluate-opportunities/index.ts` | Change price_history query from `'1h'` to `'15min'` (line 300) |
-| `send-daily-report/index.ts` | New function: daily W/L summary to Telegram at 23:00 |
-| `supabase/config.toml` | Register `send-daily-report` |
+| Setup | Base Win Rate | Confluence | Final Confidence |
+|-------|---------------|------------|------------------|
+| 1 Tier 1 pattern | 52% | +0% | 52% |
+| 2 Tier 1 patterns | 52% | +2% | 54% |
+| 3 Tier 1 patterns | 52% | +4% | 56% |
+| 4 Tier 1 patterns | 52% | +6% (cap) | 58% |
 
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/scan-opportunities/index.ts` | Lower threshold to 50%, add +2%/pattern confluence bonus (capped at +6%) |
+
+## Verification Steps
+
+After deployment:
+1. Check edge function logs for "Created new opportunity" messages
+2. Check logs for "Telegram notification sent" messages
+3. Confirm signal appears in Telegram channel
