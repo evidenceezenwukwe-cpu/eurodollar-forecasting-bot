@@ -666,11 +666,18 @@ async function analyzeCRT(supabase: any, symbol: string): Promise<CRTSignal | nu
     ...(m15Entry.hasInducement ? ['M15 Inducement'] : []),
   ];
 
+  // Add 5-pip buffer to SL beyond the M15 sweep wick for breathing room
+  const pipValue = getPipValue(symbol);
+  const slBuffer = 5 * pipValue;
+  const bufferedStopLoss = signalType === 'SELL' 
+    ? m15Entry.stopLoss + slBuffer   // Above the wick for SELL
+    : m15Entry.stopLoss - slBuffer;  // Below the wick for BUY
+
   return {
     signal: signalType,
     confidence,
     entryPrice: m15Entry.entryPrice,
-    stopLoss: m15Entry.stopLoss,
+    stopLoss: bufferedStopLoss,
     takeProfit1,
     takeProfit2: null, // CRT uses single TP at opposite range
     reasoning,

@@ -297,7 +297,7 @@ serve(async (req) => {
         .from('price_history')
         .select('timestamp, high, low, close')
         .eq('symbol', opportunitySymbol)
-        .eq('timeframe', '1h')
+        .eq('timeframe', '15min')
         .gte('timestamp', opp.created_at)
         .order('timestamp', { ascending: true });
 
