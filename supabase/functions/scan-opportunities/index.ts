@@ -66,6 +66,67 @@ function isForexMarketOpen(): { isOpen: boolean; reason: string } {
 }
 
 // =====================================================================
+// Session Timing Utilities
+// =====================================================================
+type TradingSession = 'LONDON' | 'NEWYORK' | 'ASIA' | null;
+
+function getCurrentSession(): TradingSession {
+  const now = new Date();
+  const h = now.getUTCHours();
+  const m = now.getUTCMinutes();
+  const t = h * 60 + m; // minutes since midnight UTC
+
+  // Asia: 23:00 – 08:00 UTC (wraps midnight)
+  if (t >= 23 * 60 || t < 8 * 60) return 'ASIA';
+  // London: 07:00 – 16:00 UTC
+  if (t >= 7 * 60 && t < 16 * 60) return 'LONDON';
+  // New York: 12:00 – 21:00 UTC
+  if (t >= 12 * 60 && t < 21 * 60) return 'NEWYORK';
+
+  return null;
+}
+
+async function isSessionAllowed(supabase: any, userId: string | undefined): Promise<{ allowed: boolean; session: TradingSession; reason: string }> {
+  const session = getCurrentSession();
+
+  if (!userId || !session) {
+    return { allowed: true, session, reason: 'No user context or no active session' };
+  }
+
+  // Check if user has the session_filters feature
+  const { data: hasFeature } = await supabase.rpc('has_feature', { _user_id: userId, _feature: 'session_filters' });
+
+  if (!hasFeature) {
+    return { allowed: true, session, reason: 'User does not have session_filters feature' };
+  }
+
+  // Load preferences
+  const { data: prefs, error } = await supabase
+    .from('user_session_preferences')
+    .select('allow_london, allow_newyork, allow_asia')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error || !prefs) {
+    // No preferences set = all sessions allowed (default)
+    return { allowed: true, session, reason: 'No session preferences configured' };
+  }
+
+  const sessionMap: Record<string, boolean> = {
+    LONDON: prefs.allow_london,
+    NEWYORK: prefs.allow_newyork,
+    ASIA: prefs.allow_asia,
+  };
+
+  const allowed = sessionMap[session] ?? true;
+  return {
+    allowed,
+    session,
+    reason: allowed ? `Session ${session} is allowed` : `Session ${session} is blocked by user preference`,
+  };
+}
+
+// =====================================================================
 // Candle type
 // =====================================================================
 interface Candle {
