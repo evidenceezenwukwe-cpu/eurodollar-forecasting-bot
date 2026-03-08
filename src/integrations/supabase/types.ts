@@ -14,6 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
+      historical_price_data: {
+        Row: {
+          close: number
+          created_at: string | null
+          high: number
+          id: string
+          low: number
+          open: number
+          source: string | null
+          symbol: string
+          timeframe: string
+          timestamp: string
+          volume: number | null
+        }
+        Insert: {
+          close: number
+          created_at?: string | null
+          high: number
+          id?: string
+          low: number
+          open: number
+          source?: string | null
+          symbol: string
+          timeframe: string
+          timestamp: string
+          volume?: number | null
+        }
+        Update: {
+          close?: number
+          created_at?: string | null
+          high?: number
+          id?: string
+          low?: number
+          open?: number
+          source?: string | null
+          symbol?: string
+          timeframe?: string
+          timestamp?: string
+          volume?: number | null
+        }
+        Relationships: []
+      }
       pattern_statistics: {
         Row: {
           avg_pips_12h: number | null
@@ -71,6 +113,51 @@ export type Database = {
           win_rate_24h?: number | null
           win_rate_48h?: number | null
           win_rate_4h?: number | null
+        }
+        Relationships: []
+      }
+      plan_features: {
+        Row: {
+          created_at: string | null
+          enabled: boolean
+          feature: string
+          id: string
+          plan: string
+        }
+        Insert: {
+          created_at?: string | null
+          enabled?: boolean
+          feature: string
+          id?: string
+          plan: string
+        }
+        Update: {
+          created_at?: string | null
+          enabled?: boolean
+          feature?: string
+          id?: string
+          plan?: string
+        }
+        Relationships: []
+      }
+      plans: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          name?: string
         }
         Relationships: []
       }
@@ -467,6 +554,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      has_feature: {
+        Args: { _feature: string; _user_id: string }
+        Returns: boolean
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
