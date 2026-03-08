@@ -1,85 +1,86 @@
 
+# Fix: Unblock Signals & Ensure Telegram Delivery
 
-# Historical Market Data Import System
+## Root Cause
 
-## Overview
+The Telegram notification code (lines 976-1002) is correctly implemented but **never executes** because all signals are blocked earlier at line 855:
 
-Build a complete historical data ingestion pipeline: a dedicated `historical_price_data` table, a robust edge function for parsing/validating CSV/JSON uploads, and an admin UI tab for uploading files and viewing import results.
-
-## 1. Database Migration
-
-Create the `historical_price_data` table with a unique constraint for deduplication and a composite index for query performance.
-
-```sql
-CREATE TABLE public.historical_price_data (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  symbol text NOT NULL,
-  timeframe text NOT NULL,
-  timestamp timestamptz NOT NULL,
-  open numeric NOT NULL,
-  high numeric NOT NULL,
-  low numeric NOT NULL,
-  close numeric NOT NULL,
-  volume numeric DEFAULT 0,
-  source text DEFAULT 'csv_import',
-  created_at timestamptz DEFAULT now(),
-  UNIQUE (symbol, timeframe, timestamp)
-);
-
-CREATE INDEX idx_historical_price_lookup 
-  ON public.historical_price_data (symbol, timeframe, timestamp);
-
--- RLS: public read, service role write
-ALTER TABLE public.historical_price_data ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Allow public read access to historical data"
-  ON public.historical_price_data FOR SELECT USING (true);
-
-CREATE POLICY "Allow service role to manage historical data"
-  ON public.historical_price_data FOR ALL USING (true) WITH CHECK (true);
+```typescript
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
+  console.log(`[${symbol}] No high-probability opportunity detected`);
+  return; // ← Telegram code never reached
+}
 ```
 
-## 2. Edge Function: `import-historical-data`
+With the recent fix making confidence scores realistic (max ~58%), this threshold blocks 100% of valid signals.
 
-Rewrite the existing `supabase/functions/import-historical-data/index.ts` to support:
+## Solution: Two Changes
 
-- **Dual input**: Accept `candles` array (JSON) OR raw `csvData` string
-- **CSV parsing**: Split lines, map columns (`timestamp,open,high,low,close,volume`)
-- **Validation per row**:
-  - Timestamp is valid and not in the future
-  - OHLC are numeric
-  - `high >= max(open, close)` and `low <= min(open, close)`
-- **Timeframe normalization**: Map variants like `1m`, `1min`, `1minute` to canonical `1min`
-- **Batch upsert** into `historical_price_data` (not `price_history`) in chunks of 2000
-- **Return**: `{ inserted, skipped, invalidRows, timeRange, totalProcessed }`
-- **Target table**: `historical_price_data` (new table, not `price_history`)
+### Change 1: Lower Confidence Threshold (Critical)
 
-## 3. Admin UI: `HistoricalDataPanel` Component
+**File**: `supabase/functions/scan-opportunities/index.ts`  
+**Line 855**
 
-New file: `src/components/admin/HistoricalDataPanel.tsx`
+```typescript
+// FROM:
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2)
 
-Features:
-- File input accepting `.csv` and `.json`
-- Dropdown selects for currency pair (from `useCurrencyPairs`) and timeframe
-- Client-side CSV parsing with `FileReader`
-- Chunked upload (10,000 rows per request) to avoid edge function timeouts
-- Progress bar showing batch progress
-- Results summary: rows inserted, skipped, invalid, time range
-- Validation error display
+// TO:
+if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2)
+```
 
-## 4. Admin Page Integration
+### Change 2: Add Modest Confluence Bonus
 
-Update `src/pages/Admin.tsx`:
-- Add a 5th tab "Historical Data" 
-- Import and render `HistoricalDataPanel`
-- Update the `TabsList` grid from `grid-cols-4` to `grid-cols-5`
+Restore the trading concept that multiple confirmations = better setup, but with conservative values.
 
-## Files Changed
+**Location**: Around lines 695-710 (after weighted average calculation)
 
-| File | Action |
-|------|--------|
-| Database migration (SQL) | Create `historical_price_data` table + index + RLS |
-| `supabase/functions/import-historical-data/index.ts` | Rewrite with CSV support, validation, new target table |
-| `src/components/admin/HistoricalDataPanel.tsx` | New — upload UI with progress and results |
-| `src/pages/Admin.tsx` | Add "Historical Data" tab |
+```typescript
+// After calculating base confidence from weighted average:
+let confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
 
+// Add modest confluence bonus for multiple Tier 1 patterns
+const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
+if (tier1Patterns.length > 1) {
+  const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
+  confidence += confluenceBonus;
+  reasons.push(`🎯 Confluence: ${tier1Patterns.length} confirming patterns (+${confluenceBonus}%)`);
+}
+
+// Cap at reasonable maximum
+confidence = Math.min(58, Math.max(45, confidence));
+```
+
+## Expected Signal Flow After Fix
+
+```text
+Pattern Detection → Confidence Calculation (50-58%)
+        ↓
+Threshold Check (>= 50%) ✅ PASSES
+        ↓
+Insert to Database ✅
+        ↓
+Send Telegram Notification ✅ ← NOW REACHED
+```
+
+## Confidence Examples After Fix
+
+| Setup | Base Win Rate | Confluence | Final Confidence |
+|-------|---------------|------------|------------------|
+| 1 Tier 1 pattern | 52% | +0% | 52% |
+| 2 Tier 1 patterns | 52% | +2% | 54% |
+| 3 Tier 1 patterns | 52% | +4% | 56% |
+| 4 Tier 1 patterns | 52% | +6% (cap) | 58% |
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/scan-opportunities/index.ts` | Lower threshold to 50%, add +2%/pattern confluence bonus (capped at +6%) |
+
+## Verification Steps
+
+After deployment:
+1. Check edge function logs for "Created new opportunity" messages
+2. Check logs for "Telegram notification sent" messages
+3. Confirm signal appears in Telegram channel
