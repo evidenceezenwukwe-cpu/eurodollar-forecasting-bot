@@ -348,6 +348,9 @@ const Settings = () => {
               )}
             </section>
 
+            {/* Session Preferences */}
+            <SessionPreferences hasFeature={hasFeature('session_filters')} />
+
             {/* Sign Out */}
             <section className="premium-card p-6 lg:p-8">
               <h2 className="text-lg font-semibold mb-4">Account</h2>
