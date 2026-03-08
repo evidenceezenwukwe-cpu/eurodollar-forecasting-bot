@@ -522,6 +522,36 @@ export type Database = {
         }
         Relationships: []
       }
+      user_session_preferences: {
+        Row: {
+          allow_asia: boolean
+          allow_london: boolean
+          allow_newyork: boolean
+          created_at: string | null
+          id: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          allow_asia?: boolean
+          allow_london?: boolean
+          allow_newyork?: boolean
+          created_at?: string | null
+          id?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          allow_asia?: boolean
+          allow_london?: boolean
+          allow_newyork?: boolean
+          created_at?: string | null
+          id?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       whitelisted_emails: {
         Row: {
           added_by: string | null

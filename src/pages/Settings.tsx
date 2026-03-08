@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useSubscription } from '@/hooks/useSubscription';
+import { useFeatureAccess } from '@/hooks/useFeatureAccess';
+import { SessionPreferences } from '@/components/settings/SessionPreferences';
 import { toast } from 'sonner';
 import {
   AlertDialog,
@@ -74,6 +76,7 @@ const getStatusColor = (status: string): string => {
 const Settings = () => {
   const navigate = useNavigate();
   const { subscription, isLoading, refreshSubscription } = useSubscription();
+  const { hasFeature, isLoading: featuresLoading } = useFeatureAccess();
   const [user, setUser] = useState<any>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
@@ -344,6 +347,9 @@ const Settings = () => {
                 </div>
               )}
             </section>
+
+            {/* Session Preferences */}
+            <SessionPreferences hasFeature={hasFeature('session_filters')} />
 
             {/* Sign Out */}
             <section className="premium-card p-6 lg:p-8">
