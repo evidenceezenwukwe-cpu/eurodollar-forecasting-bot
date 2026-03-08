@@ -1,86 +1,44 @@
 
-# Fix: Unblock Signals & Ensure Telegram Delivery
 
-## Root Cause
+# Analysis: Stop Losses Still Too Tight
 
-The Telegram notification code (lines 976-1002) is correctly implemented but **never executes** because all signals are blocked earlier at line 855:
+## The Problem
 
-```typescript
-if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
-  console.log(`[${symbol}] No high-probability opportunity detected`);
-  return; // ← Telegram code never reached
-}
-```
-
-With the recent fix making confidence scores realistic (max ~58%), this threshold blocks 100% of valid signals.
-
-## Solution: Two Changes
-
-### Change 1: Lower Confidence Threshold (Critical)
-
-**File**: `supabase/functions/scan-opportunities/index.ts`  
-**Line 855**
-
-```typescript
-// FROM:
-if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2)
-
-// TO:
-if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2)
-```
-
-### Change 2: Add Modest Confluence Bonus
-
-Restore the trading concept that multiple confirmations = better setup, but with conservative values.
-
-**Location**: Around lines 695-710 (after weighted average calculation)
-
-```typescript
-// After calculating base confidence from weighted average:
-let confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
-
-// Add modest confluence bonus for multiple Tier 1 patterns
-const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
-if (tier1Patterns.length > 1) {
-  const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
-  confidence += confluenceBonus;
-  reasons.push(`🎯 Confluence: ${tier1Patterns.length} confirming patterns (+${confluenceBonus}%)`);
-}
-
-// Cap at reasonable maximum
-confidence = Math.min(58, Math.max(45, confidence));
-```
-
-## Expected Signal Flow After Fix
+The current SL logic sets the stop at the **wick of a single M15 candle** plus a 5-pip buffer. On M15, candle wicks are often tiny (1-3 pips), so the total SL distance is frequently only **6-8 pips** — not enough room for normal market noise.
 
 ```text
-Pattern Detection → Confidence Calculation (50-58%)
-        ↓
-Threshold Check (>= 50%) ✅ PASSES
-        ↓
-Insert to Database ✅
-        ↓
-Send Telegram Notification ✅ ← NOW REACHED
+Example SELL signal:
+  Entry (body high):    1.08500
+  Wick (candle high):   1.08520  ← only 2 pips above entry
+  + 5 pip buffer:       1.08570  ← total SL = 7 pips
+  
+  Normal M15 noise can easily be 10-20 pips
 ```
 
-## Confidence Examples After Fix
+## Proposed Fix: ATR-Based Minimum Stop Loss
 
-| Setup | Base Win Rate | Confluence | Final Confidence |
-|-------|---------------|------------|------------------|
-| 1 Tier 1 pattern | 52% | +0% | 52% |
-| 2 Tier 1 patterns | 52% | +2% | 54% |
-| 3 Tier 1 patterns | 52% | +4% | 56% |
-| 4 Tier 1 patterns | 52% | +6% (cap) | 58% |
+Keep the structural anchor (sweep wick + 5 pip buffer) but enforce a **minimum SL distance** based on the M15 ATR (Average True Range). This ensures stops respect market volatility while staying structurally valid.
 
-## Files to Modify
+**Logic**:
+- Calculate M15 ATR(14) from recent candles
+- Minimum SL = `1.5 × ATR`
+- If the structural SL (wick + 5 pips) is tighter than the ATR minimum, widen it to the ATR minimum
+- This typically produces SL distances of **15-30 pips** for major pairs, scaling naturally with volatility
 
-| File | Changes |
-|------|---------|
-| `supabase/functions/scan-opportunities/index.ts` | Lower threshold to 50%, add +2%/pattern confluence bonus (capped at +6%) |
+```text
+Example after fix:
+  Entry:          1.08500
+  Structural SL:  1.08570  (7 pips — too tight)
+  M15 ATR(14):    0.00120  (12 pips)
+  Min SL:         1.5 × 12 = 18 pips
+  Final SL:       1.08680  (18 pips — respects volatility)
+```
 
-## Verification Steps
+## Changes
 
-After deployment:
-1. Check edge function logs for "Created new opportunity" messages
-2. Check logs for "Telegram notification sent" messages
-3. Confirm signal appears in Telegram channel
+| File | Change |
+|------|--------|
+| `scan-opportunities/index.ts` | Add ATR calculation for M15 candles, enforce minimum SL of 1.5× ATR. Only lines 669-674 affected (the SL buffer block). |
+
+No other files or logic touched.
+
