@@ -76,6 +76,7 @@ const getStatusColor = (status: string): string => {
 const Settings = () => {
   const navigate = useNavigate();
   const { subscription, isLoading, refreshSubscription } = useSubscription();
+  const { hasFeature, isLoading: featuresLoading } = useFeatureAccess();
   const [user, setUser] = useState<any>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
