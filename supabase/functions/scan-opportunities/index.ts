@@ -669,9 +669,42 @@ async function analyzeCRT(supabase: any, symbol: string): Promise<CRTSignal | nu
   // Add 5-pip buffer to SL beyond the M15 sweep wick for breathing room
   const pipValue = getPipValue(symbol);
   const slBuffer = 5 * pipValue;
-  const bufferedStopLoss = signalType === 'SELL' 
+  const structuralSL = signalType === 'SELL' 
     ? m15Entry.stopLoss + slBuffer   // Above the wick for SELL
     : m15Entry.stopLoss - slBuffer;  // Below the wick for BUY
+
+  // Enforce ATR-based minimum SL distance so stops aren't too tight
+  const m15Highs = m15Candles.map((c: any) => c.high);
+  const m15Lows = m15Candles.map((c: any) => c.low);
+  const m15Closes = m15Candles.map((c: any) => c.close);
+  const atrPeriod = 14;
+  let atr = 0;
+  if (m15Closes.length >= atrPeriod + 1) {
+    const trueRanges: number[] = [];
+    for (let i = 1; i < m15Closes.length; i++) {
+      const tr = Math.max(
+        m15Highs[i] - m15Lows[i],
+        Math.abs(m15Highs[i] - m15Closes[i - 1]),
+        Math.abs(m15Lows[i] - m15Closes[i - 1])
+      );
+      trueRanges.push(tr);
+    }
+    atr = trueRanges.slice(-atrPeriod).reduce((a: number, b: number) => a + b, 0) / atrPeriod;
+  }
+  const minSLDistance = atr * 1.5;
+  const structuralDistance = Math.abs(m15Entry.entryPrice - structuralSL);
+  
+  let bufferedStopLoss: number;
+  if (minSLDistance > 0 && structuralDistance < minSLDistance) {
+    // Widen SL to ATR-based minimum
+    bufferedStopLoss = signalType === 'SELL'
+      ? m15Entry.entryPrice + minSLDistance
+      : m15Entry.entryPrice - minSLDistance;
+    console.log(`[${symbol}] SL widened: structural=${(structuralDistance / pipValue).toFixed(1)} pips, ATR min=${(minSLDistance / pipValue).toFixed(1)} pips`);
+  } else {
+    bufferedStopLoss = structuralSL;
+    console.log(`[${symbol}] SL kept structural: ${(structuralDistance / pipValue).toFixed(1)} pips (ATR min=${(minSLDistance / pipValue).toFixed(1)} pips)`);
+  }
 
   return {
     signal: signalType,
