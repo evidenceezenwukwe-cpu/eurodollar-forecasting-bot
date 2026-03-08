@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useSubscription } from '@/hooks/useSubscription';
+import { useFeatureAccess } from '@/hooks/useFeatureAccess';
+import { SessionPreferences } from '@/components/settings/SessionPreferences';
 import { toast } from 'sonner';
 import {
   AlertDialog,

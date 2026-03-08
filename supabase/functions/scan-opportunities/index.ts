@@ -959,6 +959,25 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
 
+    // Session timing filter: if a user_id is provided, check session preferences
+    const userId = body?.user_id as string | undefined;
+    if (userId) {
+      const sessionCheck = await isSessionAllowed(supabase, userId);
+      console.log(`Session check for user ${userId}: ${sessionCheck.reason} (session=${sessionCheck.session})`);
+      if (!sessionCheck.allowed) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: sessionCheck.reason,
+            scanned: false,
+            session: sessionCheck.session,
+            sessionFiltered: true,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     // Get active pairs from database or use provided symbols
     let requestedSymbols: string[];
     if (body?.symbols) {
