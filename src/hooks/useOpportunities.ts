@@ -66,11 +66,15 @@ export function useOpportunities(symbolFilter?: string) {
     }
   }, [symbolFilter]);
 
-  const triggerScan = useCallback(async (symbols?: string[]): Promise<ScanResult> => {
+  const triggerScan = useCallback(async (symbols?: string[], profileId?: string): Promise<ScanResult> => {
     setIsScanning(true);
     try {
+      const body: Record<string, any> = {};
+      if (symbols) body.symbols = symbols;
+      if (profileId) body.profile_id = profileId;
+
       const { data, error: scanError } = await supabase.functions.invoke('scan-opportunities', {
-        body: symbols ? { symbols } : undefined
+        body: Object.keys(body).length > 0 ? body : undefined
       });
 
       if (scanError) throw scanError;
