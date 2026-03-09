@@ -80,8 +80,9 @@ const Admin = () => {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
-        <Tabs defaultValue="pairs" className="w-full">
-          <TabsList className="grid w-full max-w-4xl grid-cols-6 mb-6">
+        <Tabs defaultValue="engine" className="w-full">
+          <TabsList className="grid w-full max-w-5xl grid-cols-7 mb-6">
+            <TabsTrigger value="engine">Engine</TabsTrigger>
             <TabsTrigger value="pairs">Currency Pairs</TabsTrigger>
             <TabsTrigger value="strategies">Strategies</TabsTrigger>
             <TabsTrigger value="weekly">Weekly Post-Mortem</TabsTrigger>
@@ -90,6 +91,10 @@ const Admin = () => {
             <TabsTrigger value="support">Support</TabsTrigger>
           </TabsList>
           
+          <TabsContent value="engine">
+            <EngineObservabilityPanel />
+          </TabsContent>
+
           <TabsContent value="pairs">
             <CurrencyPairsPanel />
           </TabsContent>
