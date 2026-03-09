@@ -103,6 +103,60 @@ export type Database = {
         }
         Relationships: []
       }
+      pattern_metrics: {
+        Row: {
+          avg_pips: number
+          avg_rr: number
+          created_at: string | null
+          id: string
+          last_updated: string
+          losses: number
+          pattern_name: string
+          profit_factor: number
+          recent_results: Json | null
+          session: string
+          symbol: string
+          timeframe: string
+          trades_count: number
+          win_rate: number
+          wins: number
+        }
+        Insert: {
+          avg_pips?: number
+          avg_rr?: number
+          created_at?: string | null
+          id?: string
+          last_updated?: string
+          losses?: number
+          pattern_name: string
+          profit_factor?: number
+          recent_results?: Json | null
+          session?: string
+          symbol?: string
+          timeframe?: string
+          trades_count?: number
+          win_rate?: number
+          wins?: number
+        }
+        Update: {
+          avg_pips?: number
+          avg_rr?: number
+          created_at?: string | null
+          id?: string
+          last_updated?: string
+          losses?: number
+          pattern_name?: string
+          profit_factor?: number
+          recent_results?: Json | null
+          session?: string
+          symbol?: string
+          timeframe?: string
+          trades_count?: number
+          win_rate?: number
+          wins?: number
+        }
+        Relationships: []
+      }
       pattern_statistics: {
         Row: {
           avg_pips_12h: number | null
