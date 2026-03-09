@@ -129,9 +129,9 @@ const Dashboard = () => {
 
   const handleScan = async () => {
     try {
-      // Scan all active pairs
+      // Scan all active pairs with the selected strategy profile
       const symbols = activePairs.map(p => p.symbol);
-      const result = await triggerScan(symbols);
+      const result = await triggerScan(symbols, activeProfileId || undefined);
       if (result.opportunitiesFound && result.opportunitiesFound > 0) {
         toast.success(`Found ${result.opportunitiesFound} new opportunity(ies)!`);
       } else if (result.scanned) {
