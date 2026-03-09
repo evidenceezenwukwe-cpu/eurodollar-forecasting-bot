@@ -8,6 +8,7 @@ import WeeklyPostMortem from "@/components/admin/WeeklyPostMortem";
 import DailyBiasPanel from "@/components/admin/DailyBiasPanel";
 import WhitelistPanel from "@/components/admin/WhitelistPanel";
 import CurrencyPairsPanel from "@/components/admin/CurrencyPairsPanel";
+import SupportTicketsPanel from "@/components/admin/SupportTicketsPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const Admin = () => {
