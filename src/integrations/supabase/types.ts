@@ -14,6 +14,53 @@ export type Database = {
   }
   public: {
     Tables: {
+      blocked_signals: {
+        Row: {
+          block_reason: string
+          constraint_violated: string
+          created_at: string | null
+          current_value: number | null
+          id: string
+          limit_value: number | null
+          opportunity_id: string | null
+          signal_type: string
+          symbol: string
+          user_id: string
+        }
+        Insert: {
+          block_reason: string
+          constraint_violated: string
+          created_at?: string | null
+          current_value?: number | null
+          id?: string
+          limit_value?: number | null
+          opportunity_id?: string | null
+          signal_type: string
+          symbol: string
+          user_id: string
+        }
+        Update: {
+          block_reason?: string
+          constraint_violated?: string
+          created_at?: string | null
+          current_value?: number | null
+          id?: string
+          limit_value?: number | null
+          opportunity_id?: string | null
+          signal_type?: string
+          symbol?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blocked_signals_opportunity_id_fkey"
+            columns: ["opportunity_id"]
+            isOneToOne: false
+            referencedRelation: "trading_opportunities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       historical_price_data: {
         Row: {
           close: number
@@ -500,6 +547,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      user_prop_constraints: {
+        Row: {
+          created_at: string | null
+          enabled: boolean
+          id: string
+          max_daily_loss_percent: number
+          max_open_trades: number
+          max_risk_percent: number
+          max_trades_per_day: number
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          enabled?: boolean
+          id?: string
+          max_daily_loss_percent?: number
+          max_open_trades?: number
+          max_risk_percent?: number
+          max_trades_per_day?: number
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          enabled?: boolean
+          id?: string
+          max_daily_loss_percent?: number
+          max_open_trades?: number
+          max_risk_percent?: number
+          max_trades_per_day?: number
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
       }
       user_roles: {
         Row: {
