@@ -14,6 +14,33 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_action_logs: {
+        Row: {
+          action: string
+          admin_user_id: string
+          created_at: string
+          id: string
+          ip: string | null
+          target: string | null
+        }
+        Insert: {
+          action: string
+          admin_user_id: string
+          created_at?: string
+          id?: string
+          ip?: string | null
+          target?: string | null
+        }
+        Update: {
+          action?: string
+          admin_user_id?: string
+          created_at?: string
+          id?: string
+          ip?: string | null
+          target?: string | null
+        }
+        Relationships: []
+      }
       blocked_signals: {
         Row: {
           block_reason: string
@@ -891,6 +918,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_request_ip: { Args: never; Returns: string }
       has_feature: {
         Args: { _feature: string; _user_id: string }
         Returns: boolean
@@ -901,6 +929,15 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      log_admin_action: {
+        Args: {
+          p_action: string
+          p_admin_user_id?: string
+          p_ip?: string
+          p_target?: string
+        }
+        Returns: undefined
       }
     }
     Enums: {
