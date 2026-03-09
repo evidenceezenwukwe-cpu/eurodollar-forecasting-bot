@@ -31,6 +31,7 @@ export const useFeatureAccess = () => {
     const featureKeys = [
       'daily_bias', 'entry_levels', 'pattern_detection', 'track_record',
       'opportunities', 'backtesting', 'telegram_alerts', 'session_filters',
+      'prop_firm_compliance',
     ];
 
     const results: Record<string, boolean> = {};

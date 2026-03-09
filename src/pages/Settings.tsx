@@ -352,6 +352,9 @@ const Settings = () => {
             {/* Session Preferences */}
             <SessionPreferences hasFeature={hasFeature('session_filters')} />
 
+            {/* Prop Firm Compliance */}
+            <PropFirmSettings hasFeature={hasFeature('prop_firm_compliance')} />
+
             {/* Sign Out */}
             <section className="premium-card p-6 lg:p-8">
               <h2 className="text-lg font-semibold mb-4">Account</h2>

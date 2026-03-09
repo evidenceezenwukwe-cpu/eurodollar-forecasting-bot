@@ -166,6 +166,9 @@ const Dashboard = () => {
         />
         
         <main className="container mx-auto px-4 py-6">
+          {/* Blocked Signals Notifications */}
+          <BlockedSignalsBanner />
+
           {/* Multi-Price Display Grid */}
           {!pairsLoading && activePairs.length > 0 && (
             <div className="mb-6">
