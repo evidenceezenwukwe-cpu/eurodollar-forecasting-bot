@@ -87,6 +87,11 @@ export const DashboardHeader = memo(function DashboardHeader({
             </Badge>
           )}
 
+          <ContactSupportModal
+            userEmail={user?.email || undefined}
+            planType={subscription?.plan_type}
+          />
+
           <Button
             variant="ghost"
             size="icon"
