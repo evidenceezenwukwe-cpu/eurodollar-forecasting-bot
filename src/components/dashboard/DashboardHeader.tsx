@@ -22,6 +22,7 @@ interface Subscription {
 interface DashboardHeaderProps {
   user: SupabaseUser | null;
   subscription: Subscription | null;
+  isAdmin?: boolean;
   onLogout: () => void;
 }
 
