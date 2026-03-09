@@ -59,3 +59,9 @@ verify_jwt = false
 
 [functions.fetch-pattern-metrics]
 verify_jwt = false
+
+[functions.create-support-ticket]
+verify_jwt = false
+
+[functions.check-sla-escalation]
+verify_jwt = false
