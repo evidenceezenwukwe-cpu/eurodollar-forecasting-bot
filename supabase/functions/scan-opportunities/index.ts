@@ -786,11 +786,146 @@ async function analyzeCRT(supabase: any, symbol: string): Promise<CRTSignal | nu
 }
 
 // =====================================================================
+// Prop Firm Compliance Validation
+// =====================================================================
+interface PropFirmValidation {
+  allowed: boolean;
+  reason: string;
+  constraint: string;
+  currentValue?: number;
+  limitValue?: number;
+}
+
+async function validatePropFirmRules(
+  supabase: any,
+  userId: string | undefined,
+  signal: { signal_type: string; symbol: string; entry_price: number; stop_loss: number },
+): Promise<PropFirmValidation> {
+  if (!userId) return { allowed: true, reason: 'No user context', constraint: 'none' };
+
+  // Check if user has prop_firm_compliance feature
+  const { data: hasFeature } = await supabase.rpc('has_feature', {
+    _user_id: userId,
+    _feature: 'prop_firm_compliance',
+  });
+  if (!hasFeature) return { allowed: true, reason: 'Feature not enabled', constraint: 'none' };
+
+  // Load constraints
+  const { data: constraints, error } = await supabase
+    .from('user_prop_constraints')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('enabled', true)
+    .maybeSingle();
+
+  if (error || !constraints) return { allowed: true, reason: 'No constraints configured', constraint: 'none' };
+
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+
+  // Check 1: Max trades per day
+  const { count: todayTradeCount } = await supabase
+    .from('trading_opportunities')
+    .select('id', { count: 'exact', head: true })
+    .gte('created_at', todayStart.toISOString())
+    .in('status', ['ACTIVE', 'COMPLETED', 'CLOSED', 'EXPIRED']);
+
+  if ((todayTradeCount || 0) >= constraints.max_trades_per_day) {
+    return {
+      allowed: false,
+      reason: `Daily trade limit reached (${todayTradeCount}/${constraints.max_trades_per_day})`,
+      constraint: 'max_trades_per_day',
+      currentValue: todayTradeCount || 0,
+      limitValue: constraints.max_trades_per_day,
+    };
+  }
+
+  // Check 2: Max open trades
+  const { count: openTradeCount } = await supabase
+    .from('trading_opportunities')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'ACTIVE');
+
+  if ((openTradeCount || 0) >= constraints.max_open_trades) {
+    return {
+      allowed: false,
+      reason: `Open trade limit reached (${openTradeCount}/${constraints.max_open_trades})`,
+      constraint: 'max_open_trades',
+      currentValue: openTradeCount || 0,
+      limitValue: constraints.max_open_trades,
+    };
+  }
+
+  // Check 3: Max risk percent (SL distance as % of entry)
+  const riskPercent = Math.abs(signal.entry_price - signal.stop_loss) / signal.entry_price * 100;
+  if (riskPercent > constraints.max_risk_percent) {
+    return {
+      allowed: false,
+      reason: `Risk per trade too high (${riskPercent.toFixed(2)}% > ${constraints.max_risk_percent}%)`,
+      constraint: 'max_risk_percent',
+      currentValue: riskPercent,
+      limitValue: constraints.max_risk_percent,
+    };
+  }
+
+  return { allowed: true, reason: 'All prop firm rules passed', constraint: 'none' };
+}
+
+async function recordBlockedSignal(
+  supabase: any,
+  userId: string,
+  signal: { signal_type: string; symbol: string },
+  validation: PropFirmValidation,
+) {
+  await supabase.from('blocked_signals').insert({
+    user_id: userId,
+    signal_type: signal.signal_type,
+    symbol: signal.symbol,
+    block_reason: validation.reason,
+    constraint_violated: validation.constraint,
+    current_value: validation.currentValue ?? null,
+    limit_value: validation.limitValue ?? null,
+  });
+
+  // Check for repeated blocks (3+ in last hour) → alert via Telegram
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { count: recentBlocks } = await supabase
+    .from('blocked_signals')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', oneHourAgo);
+
+  if ((recentBlocks || 0) >= 3) {
+    try {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+      await fetch(`${supabaseUrl}/functions/v1/send-telegram-notification`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseAnonKey}`,
+        },
+        body: JSON.stringify({
+          symbol: signal.symbol,
+          signal_type: 'PROP_FIRM_ALERT',
+          confidence: 0,
+          entry_price: 0,
+          reasoning: `⚠️ Prop Firm Compliance: ${recentBlocks} signals blocked in the last hour.\nLatest: ${validation.reason}`,
+        }),
+      }).then(r => r.text());
+    } catch (e) {
+      console.error('Failed to send prop firm Telegram alert:', e);
+    }
+  }
+}
+
+// =====================================================================
 // Scan a single symbol for CRT + MSNR opportunities
 // =====================================================================
 async function scanSymbol(
   supabase: any,
   symbol: string,
+  userId?: string,
 ): Promise<{ success: boolean; opportunity?: any; message: string }> {
   console.log(`\n========== Scanning ${symbol} ==========`);
 
