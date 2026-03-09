@@ -29,6 +29,7 @@ interface DashboardHeaderProps {
 export const DashboardHeader = memo(function DashboardHeader({
   user,
   subscription,
+  isAdmin,
   onLogout,
 }: DashboardHeaderProps) {
   const { theme, setTheme } = useTheme();
