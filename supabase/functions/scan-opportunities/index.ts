@@ -1226,7 +1226,7 @@ serve(async (req) => {
     const newOpportunities: any[] = [];
 
     for (const symbol of requestedSymbols) {
-      const result = await scanSymbol(supabase, symbol, userId);
+      const result = await scanSymbol(supabase, symbol, userId, profile);
       results.push({ symbol, ...result });
       if (result.opportunity) {
         newOpportunities.push(result.opportunity);
