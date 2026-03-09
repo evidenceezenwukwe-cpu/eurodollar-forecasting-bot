@@ -567,6 +567,72 @@ serve(async (req) => {
         console.log(`Skipping Telegram notification for ${opp.id} - already sent at ${opp.notification_sent_at}`);
       }
 
+      // Real-time increment pattern_metrics
+      try {
+        const oppPatterns: string[] = Array.isArray(opp.patterns_detected) ? opp.patterns_detected : [];
+        const oppSymbol = opp.symbol || 'EUR/USD';
+        const pipDiv = oppSymbol.includes('JPY') ? 0.01 : 0.0001;
+        const oppPips = opp.take_profit_1 && opp.stop_loss
+          ? finalOutcome === 'WIN'
+            ? Math.abs(opp.take_profit_1 - opp.entry_price) / pipDiv
+            : Math.abs(opp.entry_price - opp.stop_loss) / pipDiv * -1
+          : 0;
+
+        // Determine session from created_at
+        const createdDate = new Date(opp.created_at);
+        const h = createdDate.getUTCHours();
+        const t = h * 60 + createdDate.getUTCMinutes();
+        const oppSession = (t >= 23 * 60 || t < 8 * 60) ? 'ASIA' : (t >= 7 * 60 && t < 16 * 60) ? 'LONDON' : (t >= 12 * 60 && t < 21 * 60) ? 'NEWYORK' : 'OTHER';
+
+        for (const pattern of oppPatterns) {
+          for (const sess of [oppSession, 'ALL']) {
+            // Fetch existing row
+            const { data: existing } = await supabase
+              .from('pattern_metrics')
+              .select('*')
+              .eq('pattern_name', pattern)
+              .eq('symbol', oppSymbol)
+              .eq('timeframe', '1h')
+              .eq('session', sess)
+              .maybeSingle();
+
+            const prevWins = existing?.wins || 0;
+            const prevLosses = existing?.losses || 0;
+            const prevPips = (existing?.avg_pips || 0) * (prevWins + prevLosses);
+            const newWins = prevWins + (finalOutcome === 'WIN' ? 1 : 0);
+            const newLosses = prevLosses + (finalOutcome !== 'WIN' ? 1 : 0);
+            const newTotal = newWins + newLosses;
+            const newAvgPips = newTotal > 0 ? Math.round(((prevPips + oppPips) / newTotal) * 10) / 10 : 0;
+            const newWinRate = newTotal > 0 ? Math.round((newWins / newTotal) * 10000) / 100 : 0;
+
+            const recentArr = Array.isArray(existing?.recent_results) ? [...(existing.recent_results as any[])] : [];
+            recentArr.unshift({ outcome: finalOutcome, pips: Math.round(oppPips * 10) / 10, date: opp.created_at });
+            if (recentArr.length > 10) recentArr.length = 10;
+
+            await supabase
+              .from('pattern_metrics')
+              .upsert({
+                pattern_name: pattern,
+                symbol: oppSymbol,
+                timeframe: '1h',
+                session: sess,
+                wins: newWins,
+                losses: newLosses,
+                trades_count: newTotal,
+                win_rate: newWinRate,
+                avg_pips: newAvgPips,
+                profit_factor: existing?.profit_factor || 0,
+                avg_rr: existing?.avg_rr || 0,
+                recent_results: recentArr,
+                last_updated: new Date().toISOString(),
+              }, { onConflict: 'pattern_name,symbol,timeframe,session' });
+          }
+        }
+        console.log(`Incremented pattern_metrics for ${oppPatterns.length} patterns`);
+      } catch (metricsErr) {
+        console.error('Failed to increment pattern_metrics:', metricsErr);
+      }
+
       results.push({
         id: opp.id,
         outcome,
