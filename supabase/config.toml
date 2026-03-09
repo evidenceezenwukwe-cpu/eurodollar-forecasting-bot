@@ -65,3 +65,9 @@ verify_jwt = false
 
 [functions.check-sla-escalation]
 verify_jwt = false
+
+[functions.parse-user-strategy]
+verify_jwt = false
+
+[functions.evaluate-user-strategy]
+verify_jwt = false
