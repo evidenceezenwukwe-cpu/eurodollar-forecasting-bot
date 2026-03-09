@@ -536,6 +536,45 @@ export type Database = {
           },
         ]
       }
+      support_tickets: {
+        Row: {
+          assigned_to: string | null
+          body: string
+          created_at: string
+          id: string
+          last_response_at: string | null
+          priority: string
+          status: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          assigned_to?: string | null
+          body: string
+          created_at?: string
+          id?: string
+          last_response_at?: string | null
+          priority?: string
+          status?: string
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          assigned_to?: string | null
+          body?: string
+          created_at?: string
+          id?: string
+          last_response_at?: string | null
+          priority?: string
+          status?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       supported_currency_pairs: {
         Row: {
           created_at: string | null
