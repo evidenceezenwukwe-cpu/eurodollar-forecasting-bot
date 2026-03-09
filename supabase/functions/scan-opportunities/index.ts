@@ -998,6 +998,22 @@ async function scanSymbol(
     console.log(`[${symbol}] Price moved ${pipsDiff.toFixed(1)} pips since last ${analysis.signal} signal — creating new opportunity`);
   }
 
+  // Prop Firm Compliance Check
+  if (userId) {
+    const propValidation = await validatePropFirmRules(supabase, userId, {
+      signal_type: analysis.signal,
+      symbol,
+      entry_price: analysis.entryPrice,
+      stop_loss: analysis.stopLoss,
+    });
+
+    if (!propValidation.allowed) {
+      console.log(`[${symbol}] BLOCKED by prop firm rules: ${propValidation.reason}`);
+      await recordBlockedSignal(supabase, userId, { signal_type: analysis.signal, symbol }, propValidation);
+      return { success: true, message: `Blocked: ${propValidation.reason}` };
+    }
+  }
+
   // Insert opportunity
   const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4 hours
 
