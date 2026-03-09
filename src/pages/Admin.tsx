@@ -9,6 +9,7 @@ import DailyBiasPanel from "@/components/admin/DailyBiasPanel";
 import WhitelistPanel from "@/components/admin/WhitelistPanel";
 import CurrencyPairsPanel from "@/components/admin/CurrencyPairsPanel";
 import SupportTicketsPanel from "@/components/admin/SupportTicketsPanel";
+import EngineObservabilityPanel from "@/components/admin/EngineObservabilityPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const Admin = () => {
