@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { Activity, Moon, Sun, LogOut, User, CreditCard, Settings, ShieldCheck } from 'lucide-react';
+import { ContactSupportModal } from '@/components/dashboard/ContactSupportModal';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
