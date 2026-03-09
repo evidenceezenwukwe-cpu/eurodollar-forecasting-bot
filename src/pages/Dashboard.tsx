@@ -249,6 +249,14 @@ const Dashboard = () => {
 
             {/* Right Column - Opportunities & Signal */}
             <div className="lg:col-span-4 space-y-4">
+              {/* Strategy Profile Selector */}
+              <StrategyProfileSelector
+                profiles={strategyProfiles}
+                activeProfileId={activeProfileId}
+                onSelect={setActiveProfileId}
+                isLoading={profilesLoading}
+              />
+
               <OpportunitiesPanel 
                 opportunities={opportunities}
                 isLoading={opportunitiesLoading}
