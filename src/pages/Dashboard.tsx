@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ThemeProvider } from 'next-themes';
 import { supabase } from '@/integrations/supabase/client';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
+import { BlockedSignalsBanner } from '@/components/dashboard/BlockedSignalsBanner';
 import { PriceDisplay } from '@/components/trading/PriceDisplay';
 import { TradingViewChart } from '@/components/trading/TradingViewChart';
 import { TimeframeSelector } from '@/components/trading/TimeframeSelector';
