@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Moon, Sun } from "lucide-react";
+import StrategyProfilesPanel from "@/components/admin/StrategyProfilesPanel";
 import WeeklyPostMortem from "@/components/admin/WeeklyPostMortem";
 import DailyBiasPanel from "@/components/admin/DailyBiasPanel";
 import WhitelistPanel from "@/components/admin/WhitelistPanel";
@@ -78,8 +79,9 @@ const Admin = () => {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs defaultValue="pairs" className="w-full">
-          <TabsList className="grid w-full max-w-2xl grid-cols-4 mb-6">
+          <TabsList className="grid w-full max-w-3xl grid-cols-5 mb-6">
             <TabsTrigger value="pairs">Currency Pairs</TabsTrigger>
+            <TabsTrigger value="strategies">Strategies</TabsTrigger>
             <TabsTrigger value="weekly">Weekly Post-Mortem</TabsTrigger>
             <TabsTrigger value="daily">Daily Bias</TabsTrigger>
             <TabsTrigger value="whitelist">Whitelist</TabsTrigger>
@@ -87,6 +89,10 @@ const Admin = () => {
           
           <TabsContent value="pairs">
             <CurrencyPairsPanel />
+          </TabsContent>
+
+          <TabsContent value="strategies">
+            <StrategyProfilesPanel />
           </TabsContent>
           
           <TabsContent value="weekly">

@@ -436,6 +436,53 @@ export type Database = {
         }
         Relationships: []
       }
+      strategy_profiles: {
+        Row: {
+          created_at: string | null
+          entry_tf: string
+          htf: string
+          id: string
+          name: string
+          settings: Json | null
+          shared: boolean
+          trigger_tf: string
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          entry_tf?: string
+          htf?: string
+          id?: string
+          name: string
+          settings?: Json | null
+          shared?: boolean
+          trigger_tf?: string
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          entry_tf?: string
+          htf?: string
+          id?: string
+          name?: string
+          settings?: Json | null
+          shared?: boolean
+          trigger_tf?: string
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "strategy_profiles_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       subscriptions: {
         Row: {
           amount: number

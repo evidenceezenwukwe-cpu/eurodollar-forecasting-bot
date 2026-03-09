@@ -3,8 +3,58 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+// =====================================================================
+// Strategy Profile Types & Defaults
+// =====================================================================
+interface StrategyProfile {
+  id?: string;
+  name: string;
+  htf: string;
+  trigger_tf: string;
+  entry_tf: string;
+  settings: Record<string, any>;
+}
+
+const DEFAULT_PROFILE: StrategyProfile = {
+  name: 'Swing (Default)',
+  htf: '1d',
+  trigger_tf: '4h',
+  entry_tf: '15min',
+  settings: {},
+};
+
+async function resolveProfile(supabase: any, profileId?: string): Promise<StrategyProfile> {
+  if (!profileId) return DEFAULT_PROFILE;
+
+  try {
+    const { data, error } = await supabase
+      .from('strategy_profiles')
+      .select('id, name, htf, trigger_tf, entry_tf, settings')
+      .eq('id', profileId)
+      .single();
+
+    if (error || !data) {
+      console.log(`Profile ${profileId} not found, using default`);
+      return DEFAULT_PROFILE;
+    }
+
+    console.log(`Resolved strategy profile: "${data.name}" (HTF=${data.htf}, Trigger=${data.trigger_tf}, Entry=${data.entry_tf})`);
+    return {
+      id: data.id,
+      name: data.name,
+      htf: data.htf,
+      trigger_tf: data.trigger_tf,
+      entry_tf: data.entry_tf,
+      settings: data.settings || {},
+    };
+  } catch {
+    console.error('Failed to resolve profile, using default');
+    return DEFAULT_PROFILE;
+  }
+}
 
 // Default pip values (overridden by database values when available)
 const DEFAULT_PIP_VALUES: Record<string, number> = {
@@ -646,20 +696,21 @@ interface CRTSignal {
   technicalData: any;
 }
 
-async function analyzeCRT(supabase: any, symbol: string): Promise<CRTSignal | null> {
-  console.log(`[${symbol}] === CRT + MSNR Analysis ===`);
+async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfile = DEFAULT_PROFILE): Promise<CRTSignal | null> {
+  console.log(`[${symbol}] === CRT + MSNR Analysis (Profile: ${profile.name}) ===`);
+  console.log(`[${symbol}] Timeframes: HTF=${profile.htf}, Trigger=${profile.trigger_tf}, Entry=${profile.entry_tf}`);
 
   // Step 0: Ensure all required timeframe data is cached
   // Process sequentially with small delays to avoid rate-limiting
-  await ensureTimeframeData(supabase, symbol, '1d');
-  await ensureTimeframeData(supabase, symbol, '4h');
-  await ensureTimeframeData(supabase, symbol, '15min');
+  await ensureTimeframeData(supabase, symbol, profile.htf);
+  await ensureTimeframeData(supabase, symbol, profile.trigger_tf);
+  await ensureTimeframeData(supabase, symbol, profile.entry_tf);
 
   // Read cached candles
   const [dailyCandles, h4Candles, m15Candles] = await Promise.all([
-    readCandles(supabase, symbol, '1d', 200),
-    readCandles(supabase, symbol, '4h', 200),
-    readCandles(supabase, symbol, '15min', 200),
+    readCandles(supabase, symbol, profile.htf, 200),
+    readCandles(supabase, symbol, profile.trigger_tf, 200),
+    readCandles(supabase, symbol, profile.entry_tf, 200),
   ]);
 
   console.log(`[${symbol}] Data: Daily=${dailyCandles.length}, H4=${h4Candles.length}, M15=${m15Candles.length}`);
@@ -926,11 +977,12 @@ async function scanSymbol(
   supabase: any,
   symbol: string,
   userId?: string,
+  profile: StrategyProfile = DEFAULT_PROFILE,
 ): Promise<{ success: boolean; opportunity?: any; message: string }> {
-  console.log(`\n========== Scanning ${symbol} ==========`);
+  console.log(`\n========== Scanning ${symbol} (Profile: ${profile.name}) ==========`);
 
-  // Run the CRT + MSNR analysis
-  const analysis = await analyzeCRT(supabase, symbol);
+  // Run the CRT + MSNR analysis with the resolved profile
+  const analysis = await analyzeCRT(supabase, symbol, profile);
 
   if (!analysis) {
     return { success: true, message: `No CRT+MSNR setup for ${symbol}` };
@@ -1110,6 +1162,10 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
 
+    // Resolve strategy profile
+    const profileId = body?.profile_id as string | undefined;
+    const profile = await resolveProfile(supabase, profileId);
+
     // Session timing filter: if a user_id is provided, check session preferences
     const userId = body?.user_id as string | undefined;
     if (userId) {
@@ -1170,7 +1226,7 @@ serve(async (req) => {
     const newOpportunities: any[] = [];
 
     for (const symbol of requestedSymbols) {
-      const result = await scanSymbol(supabase, symbol, userId);
+      const result = await scanSymbol(supabase, symbol, userId, profile);
       results.push({ symbol, ...result });
       if (result.opportunity) {
         newOpportunities.push(result.opportunity);

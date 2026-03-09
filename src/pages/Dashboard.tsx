@@ -23,6 +23,8 @@ import { useForexData } from '@/hooks/useForexData';
 import { usePrediction } from '@/hooks/usePrediction';
 import { usePredictionHistory } from '@/hooks/usePredictionHistory';
 import { useOpportunities } from '@/hooks/useOpportunities';
+import { useStrategyProfiles } from '@/hooks/useStrategyProfiles';
+import { StrategyProfileSelector } from '@/components/trading/StrategyProfileSelector';
 import { useSubscription } from '@/hooks/useSubscription';
 import { useAdmin } from '@/hooks/useAdmin';
 import { useWhitelist } from '@/hooks/useWhitelist';
@@ -49,6 +51,9 @@ const Dashboard = () => {
   const { prediction, isLoading: predictionLoading, generatePrediction } = usePrediction();
   const { predictions, isLoading: historyLoading } = usePredictionHistory();
   
+  // Strategy profiles
+  const { profiles: strategyProfiles, activeProfileId, setActiveProfileId, isLoading: profilesLoading } = useStrategyProfiles();
+
   // Get all active opportunities (not filtered by symbol)
   const { opportunities, isLoading: opportunitiesLoading, isScanning, lastScanned, triggerScan } = useOpportunities();
   const { subscription, isLoading: subscriptionLoading, hasActiveSubscription, waitForSubscription } = useSubscription();
@@ -124,9 +129,9 @@ const Dashboard = () => {
 
   const handleScan = async () => {
     try {
-      // Scan all active pairs
+      // Scan all active pairs with the selected strategy profile
       const symbols = activePairs.map(p => p.symbol);
-      const result = await triggerScan(symbols);
+      const result = await triggerScan(symbols, activeProfileId || undefined);
       if (result.opportunitiesFound && result.opportunitiesFound > 0) {
         toast.success(`Found ${result.opportunitiesFound} new opportunity(ies)!`);
       } else if (result.scanned) {
@@ -244,6 +249,14 @@ const Dashboard = () => {
 
             {/* Right Column - Opportunities & Signal */}
             <div className="lg:col-span-4 space-y-4">
+              {/* Strategy Profile Selector */}
+              <StrategyProfileSelector
+                profiles={strategyProfiles}
+                activeProfileId={activeProfileId}
+                onSelect={setActiveProfileId}
+                isLoading={profilesLoading}
+              />
+
               <OpportunitiesPanel 
                 opportunities={opportunities}
                 isLoading={opportunitiesLoading}

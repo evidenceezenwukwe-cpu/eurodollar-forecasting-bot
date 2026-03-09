@@ -1,76 +1,86 @@
 
+# Fix: Unblock Signals & Ensure Telegram Delivery
 
-## Strategy Profile Presets — Implementation Plan
+## Root Cause
 
-### Current State
-- **Database**: `strategy_profiles` table exists with 4 seeded presets (Swing, Intraday, Scalp, Prop-Compliant). RLS policies are in place.
-- **Scan engine**: `scan-opportunities/index.ts` still uses hardcoded timeframes (`1d`, `4h`, `15min`) in `analyzeCRT()` (line 649). No `profile_id` support.
-- **UI**: No profile selector component exists. No references to `strategy_profiles` anywhere in the frontend code.
-- **Feature access**: `plan_features` already gates `opportunities` — we can gate strategy profiles similarly for funded/lifetime users.
+The Telegram notification code (lines 976-1002) is correctly implemented but **never executes** because all signals are blocked earlier at line 855:
 
-### Implementation Steps
+```typescript
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
+  console.log(`[${symbol}] No high-probability opportunity detected`);
+  return; // ← Telegram code never reached
+}
+```
 
-#### 1. Modify `scan-opportunities` edge function
-In `supabase/functions/scan-opportunities/index.ts`:
+With the recent fix making confidence scores realistic (max ~58%), this threshold blocks 100% of valid signals.
 
-- Add a `StrategyProfile` interface and `DEFAULT_PROFILE` constant (htf=`1d`, trigger=`4h`, entry=`15min`)
-- In the main handler (~line 1111), read `body.profile_id`. If provided, query `strategy_profiles` table by ID to load the profile. Fallback to `DEFAULT_PROFILE`.
-- Refactor `analyzeCRT(supabase, symbol)` → `analyzeCRT(supabase, symbol, profile)`:
-  - Replace hardcoded `'1d'`/`'4h'`/`'15min'` with `profile.htf`/`profile.trigger_tf`/`profile.entry_tf`
-  - Apply `profile.settings.min_confidence` and `profile.settings.max_risk_pips` as post-validation filters
-- Pass the resolved profile through `scanSymbol()` down to `analyzeCRT()`
+## Solution: Two Changes
 
-#### 2. Create `useStrategyProfiles` hook
-New file `src/hooks/useStrategyProfiles.ts`:
-- Fetch all shared profiles + user's own profiles from `strategy_profiles`
-- Track `activeProfileId` in state (default: Swing preset ID)
-- Expose `profiles`, `activeProfile`, `setActiveProfile`
+### Change 1: Lower Confidence Threshold (Critical)
 
-#### 3. Create `StrategyProfileSelector` component
-New file `src/components/trading/StrategyProfileSelector.tsx`:
-- Dropdown/select showing available profiles with name and TF preview (e.g., "Swing — D1 → H4 → M15")
-- Shows HTF/Trigger/Entry badges for the selected profile
-- Gated behind `hasFeature('opportunities')` or funded plan check
+**File**: `supabase/functions/scan-opportunities/index.ts`  
+**Line 855**
 
-#### 4. Integrate into Dashboard
-In `src/pages/Dashboard.tsx`:
-- Import `useStrategyProfiles` hook
-- Add `StrategyProfileSelector` above or beside the OpportunitiesPanel
-- Pass `activeProfileId` to `triggerScan` → which passes it to the edge function body
-- Update `useOpportunities.triggerScan` to accept optional `profileId` parameter
+```typescript
+// FROM:
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2)
 
-#### 5. Update `useOpportunities` hook
-In `src/hooks/useOpportunities.ts`:
-- Modify `triggerScan` signature: `triggerScan(symbols?: string[], profileId?: string)`
-- Include `profile_id` in the edge function invocation body
+// TO:
+if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2)
+```
 
-#### 6. Admin preset management panel
-New file `src/components/admin/StrategyProfilesPanel.tsx`:
-- List all shared profiles with edit/delete
-- Form to create new global preset (name, htf, trigger_tf, entry_tf, settings JSON)
-- Add to the Admin page
+### Change 2: Add Modest Confluence Bonus
 
-### Technical Details
+Restore the trading concept that multiple confirmations = better setup, but with conservative values.
+
+**Location**: Around lines 695-710 (after weighted average calculation)
+
+```typescript
+// After calculating base confidence from weighted average:
+let confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
+
+// Add modest confluence bonus for multiple Tier 1 patterns
+const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
+if (tier1Patterns.length > 1) {
+  const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
+  confidence += confluenceBonus;
+  reasons.push(`🎯 Confluence: ${tier1Patterns.length} confirming patterns (+${confluenceBonus}%)`);
+}
+
+// Cap at reasonable maximum
+confidence = Math.min(58, Math.max(45, confidence));
+```
+
+## Expected Signal Flow After Fix
 
 ```text
-Flow: User selects profile → clicks Scan → 
-  useOpportunities.triggerScan(symbols, profileId) →
-  scan-opportunities edge function receives profile_id →
-  loads profile from DB (or falls back to default) →
-  analyzeCRT uses profile.htf/trigger_tf/entry_tf
+Pattern Detection → Confidence Calculation (50-58%)
+        ↓
+Threshold Check (>= 50%) ✅ PASSES
+        ↓
+Insert to Database ✅
+        ↓
+Send Telegram Notification ✅ ← NOW REACHED
 ```
 
-Edge function profile resolution (pseudocode):
-```typescript
-const DEFAULT_PROFILE = { htf: '1d', trigger_tf: '4h', entry_tf: '15min', settings: {} };
+## Confidence Examples After Fix
 
-let profile = DEFAULT_PROFILE;
-if (body.profile_id) {
-  const { data } = await supabase.from('strategy_profiles').select('*').eq('id', body.profile_id).single();
-  if (data) profile = data;
-}
-// Then: analyzeCRT(supabase, symbol, profile)
-```
+| Setup | Base Win Rate | Confluence | Final Confidence |
+|-------|---------------|------------|------------------|
+| 1 Tier 1 pattern | 52% | +0% | 52% |
+| 2 Tier 1 patterns | 52% | +2% | 54% |
+| 3 Tier 1 patterns | 52% | +4% | 56% |
+| 4 Tier 1 patterns | 52% | +6% (cap) | 58% |
 
-No new database migrations needed — the table and seed data already exist.
+## Files to Modify
 
+| File | Changes |
+|------|---------|
+| `supabase/functions/scan-opportunities/index.ts` | Lower threshold to 50%, add +2%/pattern confluence bonus (capped at +6%) |
+
+## Verification Steps
+
+After deployment:
+1. Check edge function logs for "Created new opportunity" messages
+2. Check logs for "Telegram notification sent" messages
+3. Confirm signal appears in Telegram channel
