@@ -23,6 +23,8 @@ import { useForexData } from '@/hooks/useForexData';
 import { usePrediction } from '@/hooks/usePrediction';
 import { usePredictionHistory } from '@/hooks/usePredictionHistory';
 import { useOpportunities } from '@/hooks/useOpportunities';
+import { useStrategyProfiles } from '@/hooks/useStrategyProfiles';
+import { StrategyProfileSelector } from '@/components/trading/StrategyProfileSelector';
 import { useSubscription } from '@/hooks/useSubscription';
 import { useAdmin } from '@/hooks/useAdmin';
 import { useWhitelist } from '@/hooks/useWhitelist';
