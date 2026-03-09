@@ -18,6 +18,7 @@ import { PredictionHistory } from '@/components/trading/PredictionHistory';
 import { LearningsPanel } from '@/components/trading/LearningsPanel';
 import { BacktestPanel } from '@/components/trading/BacktestPanel';
 import { AdvancedPatternStats } from '@/components/trading/AdvancedPatternStats';
+import StrategyEditorPanel from '@/components/trading/StrategyEditorPanel';
 import { UpgradeModal } from '@/components/dashboard/UpgradeModal';
 import { useForexData } from '@/hooks/useForexData';
 import { usePrediction } from '@/hooks/usePrediction';
@@ -284,9 +285,15 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Pattern Metrics, Prediction History, Learnings & Backtest */}
+          {/* Pattern Metrics, Strategy Editor, History, Learnings & Backtest */}
           <div className="mt-8">
             <AdvancedPatternStats className="mb-6" />
+            
+            {/* Custom Strategy Editor */}
+            <div className="mb-6">
+              <StrategyEditorPanel />
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-1">
                 <PredictionHistory 

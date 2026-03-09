@@ -775,6 +775,48 @@ export type Database = {
         }
         Relationships: []
       }
+      user_strategies: {
+        Row: {
+          active: boolean
+          created_at: string
+          description: string | null
+          id: string
+          max_strategies_limit: number
+          name: string
+          rules_json: Json
+          sandbox_expires_at: string | null
+          sandbox_mode: boolean
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          max_strategies_limit?: number
+          name: string
+          rules_json: Json
+          sandbox_expires_at?: string | null
+          sandbox_mode?: boolean
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          max_strategies_limit?: number
+          name?: string
+          rules_json?: Json
+          sandbox_expires_at?: string | null
+          sandbox_mode?: boolean
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       whitelisted_emails: {
         Row: {
           added_by: string | null
