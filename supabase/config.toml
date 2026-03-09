@@ -71,3 +71,6 @@ verify_jwt = false
 
 [functions.evaluate-user-strategy]
 verify_jwt = false
+
+[functions.strategy-engine]
+verify_jwt = false
