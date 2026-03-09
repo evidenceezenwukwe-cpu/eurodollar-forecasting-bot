@@ -61,6 +61,48 @@ export type Database = {
           },
         ]
       }
+      engine_run_logs: {
+        Row: {
+          api_calls: number
+          completed_at: string | null
+          details: Json | null
+          error: string | null
+          id: string
+          run_mode: string
+          signals_blocked: number
+          signals_generated: number
+          started_at: string
+          strategies_run: number
+          symbols_scanned: number
+        }
+        Insert: {
+          api_calls?: number
+          completed_at?: string | null
+          details?: Json | null
+          error?: string | null
+          id?: string
+          run_mode?: string
+          signals_blocked?: number
+          signals_generated?: number
+          started_at?: string
+          strategies_run?: number
+          symbols_scanned?: number
+        }
+        Update: {
+          api_calls?: number
+          completed_at?: string | null
+          details?: Json | null
+          error?: string | null
+          id?: string
+          run_mode?: string
+          signals_blocked?: number
+          signals_generated?: number
+          started_at?: string
+          strategies_run?: number
+          symbols_scanned?: number
+        }
+        Relationships: []
+      }
       historical_price_data: {
         Row: {
           close: number
