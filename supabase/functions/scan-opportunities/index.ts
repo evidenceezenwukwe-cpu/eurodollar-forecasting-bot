@@ -696,20 +696,21 @@ interface CRTSignal {
   technicalData: any;
 }
 
-async function analyzeCRT(supabase: any, symbol: string): Promise<CRTSignal | null> {
-  console.log(`[${symbol}] === CRT + MSNR Analysis ===`);
+async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfile = DEFAULT_PROFILE): Promise<CRTSignal | null> {
+  console.log(`[${symbol}] === CRT + MSNR Analysis (Profile: ${profile.name}) ===`);
+  console.log(`[${symbol}] Timeframes: HTF=${profile.htf}, Trigger=${profile.trigger_tf}, Entry=${profile.entry_tf}`);
 
   // Step 0: Ensure all required timeframe data is cached
   // Process sequentially with small delays to avoid rate-limiting
-  await ensureTimeframeData(supabase, symbol, '1d');
-  await ensureTimeframeData(supabase, symbol, '4h');
-  await ensureTimeframeData(supabase, symbol, '15min');
+  await ensureTimeframeData(supabase, symbol, profile.htf);
+  await ensureTimeframeData(supabase, symbol, profile.trigger_tf);
+  await ensureTimeframeData(supabase, symbol, profile.entry_tf);
 
   // Read cached candles
   const [dailyCandles, h4Candles, m15Candles] = await Promise.all([
-    readCandles(supabase, symbol, '1d', 200),
-    readCandles(supabase, symbol, '4h', 200),
-    readCandles(supabase, symbol, '15min', 200),
+    readCandles(supabase, symbol, profile.htf, 200),
+    readCandles(supabase, symbol, profile.trigger_tf, 200),
+    readCandles(supabase, symbol, profile.entry_tf, 200),
   ]);
 
   console.log(`[${symbol}] Data: Daily=${dailyCandles.length}, H4=${h4Candles.length}, M15=${m15Candles.length}`);
