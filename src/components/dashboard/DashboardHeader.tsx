@@ -79,6 +79,13 @@ export const DashboardHeader = memo(function DashboardHeader({
 
           {getPlanBadge()}
 
+          {isAdmin && (
+            <Badge variant="outline" className="border-primary/50 text-primary text-xs gap-1">
+              <ShieldCheck className="h-3 w-3" />
+              Admin
+            </Badge>
+          )}
+
           <Button
             variant="ghost"
             size="icon"
