@@ -108,6 +108,10 @@ const Admin = () => {
           <TabsContent value="whitelist">
             <WhitelistPanel />
           </TabsContent>
+
+          <TabsContent value="support">
+            <SupportTicketsPanel />
+          </TabsContent>
         </Tabs>
       </main>
     </div>
