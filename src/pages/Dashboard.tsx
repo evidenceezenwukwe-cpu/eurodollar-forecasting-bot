@@ -168,6 +168,7 @@ const Dashboard = () => {
         <DashboardHeader 
           user={user} 
           subscription={subscription}
+          isAdmin={isAdmin}
           onLogout={handleLogout} 
         />
         
