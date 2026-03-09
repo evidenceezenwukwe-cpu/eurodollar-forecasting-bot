@@ -80,12 +80,13 @@ const Admin = () => {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs defaultValue="pairs" className="w-full">
-          <TabsList className="grid w-full max-w-3xl grid-cols-5 mb-6">
+          <TabsList className="grid w-full max-w-4xl grid-cols-6 mb-6">
             <TabsTrigger value="pairs">Currency Pairs</TabsTrigger>
             <TabsTrigger value="strategies">Strategies</TabsTrigger>
             <TabsTrigger value="weekly">Weekly Post-Mortem</TabsTrigger>
             <TabsTrigger value="daily">Daily Bias</TabsTrigger>
             <TabsTrigger value="whitelist">Whitelist</TabsTrigger>
+            <TabsTrigger value="support">Support</TabsTrigger>
           </TabsList>
           
           <TabsContent value="pairs">
