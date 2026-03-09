@@ -18,6 +18,7 @@ import { PredictionHistory } from '@/components/trading/PredictionHistory';
 import { LearningsPanel } from '@/components/trading/LearningsPanel';
 import { BacktestPanel } from '@/components/trading/BacktestPanel';
 import { AdvancedPatternStats } from '@/components/trading/AdvancedPatternStats';
+import StrategyEditorPanel from '@/components/trading/StrategyEditorPanel';
 import { UpgradeModal } from '@/components/dashboard/UpgradeModal';
 import { useForexData } from '@/hooks/useForexData';
 import { usePrediction } from '@/hooks/usePrediction';
