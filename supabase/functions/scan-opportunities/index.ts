@@ -3,8 +3,58 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
+
+// =====================================================================
+// Strategy Profile Types & Defaults
+// =====================================================================
+interface StrategyProfile {
+  id?: string;
+  name: string;
+  htf: string;
+  trigger_tf: string;
+  entry_tf: string;
+  settings: Record<string, any>;
+}
+
+const DEFAULT_PROFILE: StrategyProfile = {
+  name: 'Swing (Default)',
+  htf: '1d',
+  trigger_tf: '4h',
+  entry_tf: '15min',
+  settings: {},
+};
+
+async function resolveProfile(supabase: any, profileId?: string): Promise<StrategyProfile> {
+  if (!profileId) return DEFAULT_PROFILE;
+
+  try {
+    const { data, error } = await supabase
+      .from('strategy_profiles')
+      .select('id, name, htf, trigger_tf, entry_tf, settings')
+      .eq('id', profileId)
+      .single();
+
+    if (error || !data) {
+      console.log(`Profile ${profileId} not found, using default`);
+      return DEFAULT_PROFILE;
+    }
+
+    console.log(`Resolved strategy profile: "${data.name}" (HTF=${data.htf}, Trigger=${data.trigger_tf}, Entry=${data.entry_tf})`);
+    return {
+      id: data.id,
+      name: data.name,
+      htf: data.htf,
+      trigger_tf: data.trigger_tf,
+      entry_tf: data.entry_tf,
+      settings: data.settings || {},
+    };
+  } catch {
+    console.error('Failed to resolve profile, using default');
+    return DEFAULT_PROFILE;
+  }
+}
 
 // Default pip values (overridden by database values when available)
 const DEFAULT_PIP_VALUES: Record<string, number> = {
