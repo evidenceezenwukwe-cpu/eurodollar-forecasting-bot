@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Moon, Sun } from "lucide-react";
+import StrategyProfilesPanel from "@/components/admin/StrategyProfilesPanel";
 import WeeklyPostMortem from "@/components/admin/WeeklyPostMortem";
 import DailyBiasPanel from "@/components/admin/DailyBiasPanel";
 import WhitelistPanel from "@/components/admin/WhitelistPanel";
