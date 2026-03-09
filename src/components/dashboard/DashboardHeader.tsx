@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, Moon, Sun, LogOut, User, CreditCard, Settings } from 'lucide-react';
+import { Activity, Moon, Sun, LogOut, User, CreditCard, Settings, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -22,12 +22,14 @@ interface Subscription {
 interface DashboardHeaderProps {
   user: SupabaseUser | null;
   subscription: Subscription | null;
+  isAdmin?: boolean;
   onLogout: () => void;
 }
 
 export const DashboardHeader = memo(function DashboardHeader({
   user,
   subscription,
+  isAdmin,
   onLogout,
 }: DashboardHeaderProps) {
   const { theme, setTheme } = useTheme();
@@ -76,6 +78,13 @@ export const DashboardHeader = memo(function DashboardHeader({
           </div>
 
           {getPlanBadge()}
+
+          {isAdmin && (
+            <Badge variant="outline" className="border-primary/50 text-primary text-xs gap-1">
+              <ShieldCheck className="h-3 w-3" />
+              Admin
+            </Badge>
+          )}
 
           <Button
             variant="ghost"
