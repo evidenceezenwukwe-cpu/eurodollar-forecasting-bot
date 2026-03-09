@@ -51,6 +51,9 @@ const Dashboard = () => {
   const { prediction, isLoading: predictionLoading, generatePrediction } = usePrediction();
   const { predictions, isLoading: historyLoading } = usePredictionHistory();
   
+  // Strategy profiles
+  const { profiles: strategyProfiles, activeProfileId, setActiveProfileId, isLoading: profilesLoading } = useStrategyProfiles();
+
   // Get all active opportunities (not filtered by symbol)
   const { opportunities, isLoading: opportunitiesLoading, isScanning, lastScanned, triggerScan } = useOpportunities();
   const { subscription, isLoading: subscriptionLoading, hasActiveSubscription, waitForSubscription } = useSubscription();
