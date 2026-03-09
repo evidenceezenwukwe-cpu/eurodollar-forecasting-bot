@@ -53,3 +53,9 @@ verify_jwt = false
 
 [functions.send-telegram-notification]
 verify_jwt = false
+
+[functions.recompute-pattern-metrics]
+verify_jwt = false
+
+[functions.fetch-pattern-metrics]
+verify_jwt = false
