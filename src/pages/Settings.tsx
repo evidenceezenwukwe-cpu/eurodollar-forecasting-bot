@@ -18,6 +18,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useSubscription } from '@/hooks/useSubscription';
 import { useFeatureAccess } from '@/hooks/useFeatureAccess';
 import { SessionPreferences } from '@/components/settings/SessionPreferences';
+import { PropFirmSettings } from '@/components/settings/PropFirmSettings';
 import { toast } from 'sonner';
 import {
   AlertDialog,
@@ -350,6 +351,9 @@ const Settings = () => {
 
             {/* Session Preferences */}
             <SessionPreferences hasFeature={hasFeature('session_filters')} />
+
+            {/* Prop Firm Compliance */}
+            <PropFirmSettings hasFeature={hasFeature('prop_firm_compliance')} />
 
             {/* Sign Out */}
             <section className="premium-card p-6 lg:p-8">

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ThemeProvider } from 'next-themes';
 import { supabase } from '@/integrations/supabase/client';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
+import { BlockedSignalsBanner } from '@/components/dashboard/BlockedSignalsBanner';
 import { PriceDisplay } from '@/components/trading/PriceDisplay';
 import { TradingViewChart } from '@/components/trading/TradingViewChart';
 import { TimeframeSelector } from '@/components/trading/TimeframeSelector';
@@ -165,6 +166,9 @@ const Dashboard = () => {
         />
         
         <main className="container mx-auto px-4 py-6">
+          {/* Blocked Signals Notifications */}
+          <BlockedSignalsBanner />
+
           {/* Multi-Price Display Grid */}
           {!pairsLoading && activePairs.length > 0 && (
             <div className="mb-6">
