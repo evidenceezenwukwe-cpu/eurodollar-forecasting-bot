@@ -977,11 +977,12 @@ async function scanSymbol(
   supabase: any,
   symbol: string,
   userId?: string,
+  profile: StrategyProfile = DEFAULT_PROFILE,
 ): Promise<{ success: boolean; opportunity?: any; message: string }> {
-  console.log(`\n========== Scanning ${symbol} ==========`);
+  console.log(`\n========== Scanning ${symbol} (Profile: ${profile.name}) ==========`);
 
-  // Run the CRT + MSNR analysis
-  const analysis = await analyzeCRT(supabase, symbol);
+  // Run the CRT + MSNR analysis with the resolved profile
+  const analysis = await analyzeCRT(supabase, symbol, profile);
 
   if (!analysis) {
     return { success: true, message: `No CRT+MSNR setup for ${symbol}` };
