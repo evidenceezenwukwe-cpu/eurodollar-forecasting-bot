@@ -12,12 +12,53 @@ serve(async (req) => {
   }
 
   try {
-    const { type, date } = await req.json();
-    console.log(`Generating ${type} bias for ${date}`);
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const authHeader = req.headers.get("authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: authData, error: authError } = await authClient.auth.getUser();
+    if (authError || !authData.user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    let hasPrivilegedRole = false;
+    for (const role of ["admin", "moderator", "support_agent"]) {
+      const { data } = await supabase.rpc("has_role", {
+        _user_id: authData.user.id,
+        _role: role,
+      });
+
+      if (data) {
+        hasPrivilegedRole = true;
+        break;
+      }
+    }
+
+    if (!hasPrivilegedRole) {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { type, date } = await req.json();
+    console.log(`Generating ${type} bias for ${date}`);
 
     // Fetch latest price data
     const { data: priceData, error: priceError } = await supabase
