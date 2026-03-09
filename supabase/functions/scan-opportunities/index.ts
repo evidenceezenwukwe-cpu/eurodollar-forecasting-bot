@@ -1162,6 +1162,10 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
 
+    // Resolve strategy profile
+    const profileId = body?.profile_id as string | undefined;
+    const profile = await resolveProfile(supabase, profileId);
+
     // Session timing filter: if a user_id is provided, check session preferences
     const userId = body?.user_id as string | undefined;
     if (userId) {
