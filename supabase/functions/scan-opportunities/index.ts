@@ -1037,17 +1037,18 @@ async function scanSymbol(
     .gte('created_at', new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString());
 
   if (recentOpps && recentOpps.length > 0) {
-    const mostRecent = recentOpps[0];
-    const priceDiff = Math.abs(currentPrice - mostRecent.entry_price);
     const pipValue = getPipValue(symbol);
-    const pipsDiff = priceDiff / pipValue;
+    const tooClose = recentOpps.some((opp: any) => {
+      const pipsDiff = Math.abs(currentPrice - opp.entry_price) / pipValue;
+      return pipsDiff < 15;
+    });
 
-    if (pipsDiff < 15) {
-      console.log(`[${symbol}] Similar opportunity exists (${pipsDiff.toFixed(1)} pips difference, need 15+)`);
+    if (tooClose) {
+      console.log(`[${symbol}] Similar opportunity exists within 15 pips — skipping`);
       return { success: true, message: `Similar ${analysis.signal} opportunity exists for ${symbol}` };
     }
 
-    console.log(`[${symbol}] Price moved ${pipsDiff.toFixed(1)} pips since last ${analysis.signal} signal — creating new opportunity`);
+    console.log(`[${symbol}] Price moved 15+ pips from all recent ${analysis.signal} signals — creating new opportunity`);
   }
 
   // Prop Firm Compliance Check
