@@ -315,17 +315,31 @@ async function runUserStrategy(
   const entryResult = evaluateCondition(rules.entry.condition, entryCandles);
   if (!entryResult.triggered) return null;
 
+  // ===== Bug Fix #2: HTF Bias Evaluation =====
+  if (rules.htf_bias) {
+    const htfCandles = await readCandles(supabase, symbol, rules.htf_bias.timeframe || '1d', 30);
+    if (htfCandles.length >= 20) {
+      const htfBiasResult = evaluateHTFBias(htfCandles, rules.htf_bias.condition);
+      if (!htfBiasResult.aligned) return null;
+    }
+  }
+
+  // ===== Bug Fix #1: Direction Detection =====
   const last = entryCandles[entryCandles.length - 1];
-  const direction = rules.entry.condition.includes('bullish') ? 'bullish' : 'bearish';
+  const direction = inferDirection(entryResult, triggerResult, last);
   const entryPrice = last.close;
   const stopPrice = rules.stop ? calculateStop(rules.stop, entryCandles, direction, pipValue) : null;
   const tp1 = rules.tp?.tp1 && stopPrice ? calculateTP(rules.tp.tp1, entryPrice, stopPrice, triggerCandles, direction, pipValue) : null;
   const tp2 = rules.tp?.tp2 && stopPrice ? calculateTP(rules.tp.tp2, entryPrice, stopPrice, triggerCandles, direction, pipValue) : null;
 
+  // ===== Bug Fix #3: Dynamic Confidence =====
+  const htfAligned = !!rules.htf_bias;
+  const confidence = calculateDynamicConfidence(triggerResult, entryResult, rules, htfAligned);
+
   return {
     symbol,
     signal_type: direction === 'bullish' ? 'BUY' : 'SELL',
-    confidence: 70,
+    confidence,
     entry_price: entryPrice,
     stop_loss: stopPrice,
     take_profit_1: tp1,
