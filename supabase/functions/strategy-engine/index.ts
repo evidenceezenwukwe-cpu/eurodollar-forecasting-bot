@@ -292,6 +292,55 @@ function isInSession(sessions: string[] | undefined): boolean {
   return sessions.some(s => { const r = sessionHours[s]; if (!r) return true; return h >= r[0] && h < r[1]; });
 }
 
+// =====================================================================
+// Direction inference, HTF bias, and dynamic confidence helpers
+// =====================================================================
+function inferDirection(entryResult: any, triggerResult: any, lastCandle: Candle): string {
+  if (entryResult.details?.direction && entryResult.details.direction !== 'none') return entryResult.details.direction;
+  if (triggerResult.details?.direction && triggerResult.details.direction !== 'none') return triggerResult.details.direction;
+  // Price-action fallback
+  return lastCandle.close > lastCandle.open ? 'bullish' : 'bearish';
+}
+
+function calculateEMA(candles: Candle[], period: number): number {
+  const k = 2 / (period + 1);
+  let ema = candles[0].close;
+  for (let i = 1; i < candles.length; i++) {
+    ema = candles[i].close * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+function evaluateHTFBias(candles: Candle[], condition: string): { aligned: boolean; reason: string } {
+  const last = candles[candles.length - 1];
+  const ema20 = calculateEMA(candles.slice(-20), 20);
+
+  switch (condition) {
+    case 'bullish_trend':
+      return { aligned: last.close > ema20, reason: last.close > ema20 ? 'HTF bullish (close > EMA20)' : 'HTF not bullish' };
+    case 'bearish_trend':
+      return { aligned: last.close < ema20, reason: last.close < ema20 ? 'HTF bearish (close < EMA20)' : 'HTF not bearish' };
+    default:
+      return { aligned: true, reason: `Unknown HTF condition: ${condition}, allowing` };
+  }
+}
+
+function calculateDynamicConfidence(triggerResult: any, entryResult: any, rules: any, htfAligned: boolean): number {
+  let score = 50; // base
+  score += 8; // trigger fired (always present at this point)
+  if (htfAligned) score += 10;
+  // Entry confirmation bonus for FVG/OB (higher quality entries)
+  const entryType = rules.entry?.condition || '';
+  if (['fvg_entry', 'order_block_entry'].includes(entryType)) score += 5;
+  // Multiple confirmation bonus (trigger and entry are different types)
+  const triggerType = rules.trigger?.condition || '';
+  if (triggerType !== entryType) score += 4;
+  // Session overlap bonus
+  const h = new Date().getUTCHours();
+  if (h >= 12 && h < 16) score += 3; // London-NY overlap
+  return Math.min(score, 58); // hard cap per confidence model
+}
+
 async function runUserStrategy(
   supabase: any, strategy: any, symbol: string, pipValue: number, metrics: RunMetrics
 ): Promise<CandidateSignal | null> {

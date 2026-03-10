@@ -268,6 +268,49 @@ function calculateTP(tpConfig: any, entryPrice: number, stopPrice: number, candl
   }
 }
 
+// ===== Direction inference, HTF bias, and dynamic confidence helpers =====
+
+function inferDirection(entryResult: EvalResult, triggerResult: EvalResult, lastCandle: Candle): string {
+  if (entryResult.details?.direction && entryResult.details.direction !== 'none') return entryResult.details.direction;
+  if (triggerResult.details?.direction && triggerResult.details.direction !== 'none') return triggerResult.details.direction;
+  return lastCandle.close > lastCandle.open ? 'bullish' : 'bearish';
+}
+
+function calculateEMA(candles: Candle[], period: number): number {
+  const k = 2 / (period + 1);
+  let ema = candles[0].close;
+  for (let i = 1; i < candles.length; i++) {
+    ema = candles[i].close * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+function evaluateHTFBias(candles: Candle[], condition: string): { aligned: boolean; reason: string } {
+  const last = candles[candles.length - 1];
+  const ema20 = calculateEMA(candles.slice(-20), 20);
+  switch (condition) {
+    case 'bullish_trend':
+      return { aligned: last.close > ema20, reason: last.close > ema20 ? 'HTF bullish' : 'HTF not bullish' };
+    case 'bearish_trend':
+      return { aligned: last.close < ema20, reason: last.close < ema20 ? 'HTF bearish' : 'HTF not bearish' };
+    default:
+      return { aligned: true, reason: `Unknown HTF condition: ${condition}` };
+  }
+}
+
+function calculateDynamicConfidence(triggerResult: EvalResult, entryResult: EvalResult, rules: any, htfAligned: boolean): number {
+  let score = 50;
+  score += 8; // trigger fired
+  if (htfAligned) score += 10;
+  const entryType = rules.entry?.condition || '';
+  if (['fvg_entry', 'order_block_entry'].includes(entryType)) score += 5;
+  const triggerType = rules.trigger?.condition || '';
+  if (triggerType !== entryType) score += 4;
+  const h = new Date().getUTCHours();
+  if (h >= 12 && h < 16) score += 3;
+  return Math.min(score, 58);
+}
+
 // Session filter check
 function isInSession(sessions: string[] | undefined): boolean {
   if (!sessions || sessions.length === 0) return true;
