@@ -1,57 +1,86 @@
 
+# Fix: Unblock Signals & Ensure Telegram Delivery
 
-## Fix Three Strategy Engine Bugs
+## Root Cause
 
-### Bug 1: Direction Detection for FVG/OB/Inducement Entries
+The Telegram notification code (lines 976-1002) is correctly implemented but **never executes** because all signals are blocked earlier at line 855:
 
-**Problem** (line 311 in `strategy-engine/index.ts`, line 311 in `evaluate-user-strategy/index.ts`):
 ```typescript
-const direction = rules.entry.condition.includes('bullish') ? 'bullish' : 'bearish';
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
+  console.log(`[${symbol}] No high-probability opportunity detected`);
+  return; // ← Telegram code never reached
+}
 ```
-Conditions like `fvg_entry`, `order_block_entry`, `inducement_tap`, and `market_order` don't contain "bullish" in their name, so they always default to `bearish` — producing wrong SELL signals.
 
-**Fix**: Derive direction from the evaluation result. The primitive functions (`checkFVGEntry`, `checkOrderBlockEntry`, `checkRangeSweep`) already detect direction internally but don't expose it. Update them to return `details.direction`, then use that as the source of truth. Fallback chain: `entryResult.details?.direction` → `triggerResult.details?.direction` → price-action heuristic (close > open of last candle = bullish).
+With the recent fix making confidence scores realistic (max ~58%), this threshold blocks 100% of valid signals.
 
-Apply this fix in both `strategy-engine/index.ts` (line 311) and `evaluate-user-strategy/index.ts` (equivalent line ~350).
+## Solution: Two Changes
 
-### Bug 2: HTF Bias Not Evaluated
+### Change 1: Lower Confidence Threshold (Critical)
 
-**Problem**: The DSL supports `rules.htf_bias` (e.g., `{ timeframe: "1d", condition: "bullish_trend" }`) but `runUserStrategy` never reads or evaluates it. Signals fire without confirming higher-timeframe alignment.
+**File**: `supabase/functions/scan-opportunities/index.ts`  
+**Line 855**
 
-**Fix**: After trigger passes but before entry evaluation, fetch HTF candles and check bias. Add new primitives:
-- `bullish_trend`: EMA-based check (last close > EMA of last 20 candles)
-- `bearish_trend`: last close < EMA of last 20 candles
-- `sweep_high` / `sweep_low`: reuse existing primitives on HTF data
+```typescript
+// FROM:
+if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2)
 
-If HTF bias check fails, skip the signal. This adds ~1 DB query per strategy-symbol pair (only when trigger fires).
+// TO:
+if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2)
+```
 
-### Bug 3: Static Confidence (hardcoded 70)
+### Change 2: Add Modest Confluence Bonus
 
-**Problem** (line 320): `confidence: 70` for every user strategy signal, regardless of setup quality. This makes the conflict resolution algorithm ineffective since all user signals tie.
+Restore the trading concept that multiple confirmations = better setup, but with conservative values.
 
-**Fix**: Build a dynamic confidence scorer that starts at a base of 50 and adds bonuses:
+**Location**: Around lines 695-710 (after weighted average calculation)
 
-| Factor | Bonus |
-|--------|-------|
-| HTF bias aligned | +10 |
-| Trigger fired (sweep/BOS) | +8 (base, always present) |
-| Entry confirmed (FVG/OB) | +5 |
-| Multiple confirmations (trigger + entry different types) | +4 |
-| Session overlap (London/NY) | +3 |
-| **Cap** | **58** (per existing confidence model) |
+```typescript
+// After calculating base confidence from weighted average:
+let confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
 
-This respects the existing confidence model (50-58 range, hard cap at 58).
+// Add modest confluence bonus for multiple Tier 1 patterns
+const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
+if (tier1Patterns.length > 1) {
+  const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
+  confidence += confluenceBonus;
+  reasons.push(`🎯 Confluence: ${tier1Patterns.length} confirming patterns (+${confluenceBonus}%)`);
+}
 
-### Files Modified
+// Cap at reasonable maximum
+confidence = Math.min(58, Math.max(45, confidence));
+```
 
-1. **`supabase/functions/strategy-engine/index.ts`**:
-   - Update `checkFVGEntry`, `checkOrderBlockEntry`, `checkInducement`/`checkInducementTap` to return `details.direction`
-   - Add `inferDirection()` helper using result details + price action fallback
-   - Add `evaluateHTFBias()` function with EMA-based trend detection
-   - Add `calculateDynamicConfidence()` function (50-58 range)
-   - Update `runUserStrategy` to call HTF bias, use inferred direction, and compute dynamic confidence
+## Expected Signal Flow After Fix
 
-2. **`supabase/functions/evaluate-user-strategy/index.ts`**: Mirror the same three fixes (direction, HTF bias, dynamic confidence) for consistency since this is the standalone version of the same logic.
+```text
+Pattern Detection → Confidence Calculation (50-58%)
+        ↓
+Threshold Check (>= 50%) ✅ PASSES
+        ↓
+Insert to Database ✅
+        ↓
+Send Telegram Notification ✅ ← NOW REACHED
+```
 
-### No database or UI changes needed.
+## Confidence Examples After Fix
 
+| Setup | Base Win Rate | Confluence | Final Confidence |
+|-------|---------------|------------|------------------|
+| 1 Tier 1 pattern | 52% | +0% | 52% |
+| 2 Tier 1 patterns | 52% | +2% | 54% |
+| 3 Tier 1 patterns | 52% | +4% | 56% |
+| 4 Tier 1 patterns | 52% | +6% (cap) | 58% |
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/scan-opportunities/index.ts` | Lower threshold to 50%, add +2%/pattern confluence bonus (capped at +6%) |
+
+## Verification Steps
+
+After deployment:
+1. Check edge function logs for "Created new opportunity" messages
+2. Check logs for "Telegram notification sent" messages
+3. Confirm signal appears in Telegram channel

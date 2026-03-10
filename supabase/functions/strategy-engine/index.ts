@@ -219,8 +219,10 @@ function evaluateCondition(conditionName: string, candles: Candle[], lookback?: 
       const recent = candles.slice(-5);
       const prevLow = Math.min(...candles.slice(-8, -5).map(c => c.low));
       const prevHigh = Math.max(...candles.slice(-8, -5).map(c => c.high));
-      const took = recent.some(c => c.low < prevLow) || recent.some(c => c.high > prevHigh);
-      return { triggered: took, reason: took ? "Inducement taken" : "No inducement" };
+      const tookLow = recent.some(c => c.low < prevLow);
+      const tookHigh = recent.some(c => c.high > prevHigh);
+      const took = tookLow || tookHigh;
+      return { triggered: took, reason: took ? "Inducement taken" : "No inducement", details: { direction: tookLow ? "bullish" : tookHigh ? "bearish" : "none" } };
     },
     checkInducementTap: () => fnMap.checkInducement(),
     checkFVGEntry: () => {
@@ -228,14 +230,20 @@ function evaluateCondition(conditionName: string, candles: Candle[], lookback?: 
       const [c1, , c3] = candles.slice(-3);
       const bull = c3.low > c1.high;
       const bear = c3.high < c1.low;
-      return { triggered: bull || bear, reason: bull ? "Bullish FVG" : bear ? "Bearish FVG" : "No FVG" };
+      return { triggered: bull || bear, reason: bull ? "Bullish FVG" : bear ? "Bearish FVG" : "No FVG", details: { direction: bull ? "bullish" : bear ? "bearish" : "none" } };
     },
     checkOrderBlockEntry: () => {
       if (candles.length < 5) return { triggered: false, reason: "Insufficient data" };
       const recent = candles.slice(-5);
       for (let i = 0; i < recent.length - 1; i++) {
-        if (recent[i].close < recent[i].open && recent[i + 1].close > recent[i + 1].open && recent[i + 1].close > recent[i].open)
-          return { triggered: true, reason: `Order block at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}` };
+        const isBearish = recent[i].close < recent[i].open;
+        const nextBullish = recent[i + 1].close > recent[i + 1].open;
+        const isBullish = recent[i].close > recent[i].open;
+        const nextBearish = recent[i + 1].close < recent[i + 1].open;
+        if (isBearish && nextBullish && recent[i + 1].close > recent[i].open)
+          return { triggered: true, reason: `Demand OB at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}`, details: { direction: "bullish" } };
+        if (isBullish && nextBearish && recent[i + 1].close < recent[i].open)
+          return { triggered: true, reason: `Supply OB at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}`, details: { direction: "bearish" } };
       }
       return { triggered: false, reason: "No order block" };
     },
@@ -284,6 +292,55 @@ function isInSession(sessions: string[] | undefined): boolean {
   return sessions.some(s => { const r = sessionHours[s]; if (!r) return true; return h >= r[0] && h < r[1]; });
 }
 
+// =====================================================================
+// Direction inference, HTF bias, and dynamic confidence helpers
+// =====================================================================
+function inferDirection(entryResult: any, triggerResult: any, lastCandle: Candle): string {
+  if (entryResult.details?.direction && entryResult.details.direction !== 'none') return entryResult.details.direction;
+  if (triggerResult.details?.direction && triggerResult.details.direction !== 'none') return triggerResult.details.direction;
+  // Price-action fallback
+  return lastCandle.close > lastCandle.open ? 'bullish' : 'bearish';
+}
+
+function calculateEMA(candles: Candle[], period: number): number {
+  const k = 2 / (period + 1);
+  let ema = candles[0].close;
+  for (let i = 1; i < candles.length; i++) {
+    ema = candles[i].close * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+function evaluateHTFBias(candles: Candle[], condition: string): { aligned: boolean; reason: string } {
+  const last = candles[candles.length - 1];
+  const ema20 = calculateEMA(candles.slice(-20), 20);
+
+  switch (condition) {
+    case 'bullish_trend':
+      return { aligned: last.close > ema20, reason: last.close > ema20 ? 'HTF bullish (close > EMA20)' : 'HTF not bullish' };
+    case 'bearish_trend':
+      return { aligned: last.close < ema20, reason: last.close < ema20 ? 'HTF bearish (close < EMA20)' : 'HTF not bearish' };
+    default:
+      return { aligned: true, reason: `Unknown HTF condition: ${condition}, allowing` };
+  }
+}
+
+function calculateDynamicConfidence(triggerResult: any, entryResult: any, rules: any, htfAligned: boolean): number {
+  let score = 50; // base
+  score += 8; // trigger fired (always present at this point)
+  if (htfAligned) score += 10;
+  // Entry confirmation bonus for FVG/OB (higher quality entries)
+  const entryType = rules.entry?.condition || '';
+  if (['fvg_entry', 'order_block_entry'].includes(entryType)) score += 5;
+  // Multiple confirmation bonus (trigger and entry are different types)
+  const triggerType = rules.trigger?.condition || '';
+  if (triggerType !== entryType) score += 4;
+  // Session overlap bonus
+  const h = new Date().getUTCHours();
+  if (h >= 12 && h < 16) score += 3; // London-NY overlap
+  return Math.min(score, 58); // hard cap per confidence model
+}
+
 async function runUserStrategy(
   supabase: any, strategy: any, symbol: string, pipValue: number, metrics: RunMetrics
 ): Promise<CandidateSignal | null> {
@@ -307,17 +364,31 @@ async function runUserStrategy(
   const entryResult = evaluateCondition(rules.entry.condition, entryCandles);
   if (!entryResult.triggered) return null;
 
+  // ===== Bug Fix #2: HTF Bias Evaluation =====
+  if (rules.htf_bias) {
+    const htfCandles = await readCandles(supabase, symbol, rules.htf_bias.timeframe || '1d', 30);
+    if (htfCandles.length >= 20) {
+      const htfBiasResult = evaluateHTFBias(htfCandles, rules.htf_bias.condition);
+      if (!htfBiasResult.aligned) return null;
+    }
+  }
+
+  // ===== Bug Fix #1: Direction Detection =====
   const last = entryCandles[entryCandles.length - 1];
-  const direction = rules.entry.condition.includes('bullish') ? 'bullish' : 'bearish';
+  const direction = inferDirection(entryResult, triggerResult, last);
   const entryPrice = last.close;
   const stopPrice = rules.stop ? calculateStop(rules.stop, entryCandles, direction, pipValue) : null;
   const tp1 = rules.tp?.tp1 && stopPrice ? calculateTP(rules.tp.tp1, entryPrice, stopPrice, triggerCandles, direction, pipValue) : null;
   const tp2 = rules.tp?.tp2 && stopPrice ? calculateTP(rules.tp.tp2, entryPrice, stopPrice, triggerCandles, direction, pipValue) : null;
 
+  // ===== Bug Fix #3: Dynamic Confidence =====
+  const htfAligned = !!rules.htf_bias;
+  const confidence = calculateDynamicConfidence(triggerResult, entryResult, rules, htfAligned);
+
   return {
     symbol,
     signal_type: direction === 'bullish' ? 'BUY' : 'SELL',
-    confidence: 70,
+    confidence,
     entry_price: entryPrice,
     stop_loss: stopPrice,
     take_profit_1: tp1,
