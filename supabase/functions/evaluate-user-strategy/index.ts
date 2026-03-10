@@ -484,7 +484,7 @@ serve(async (req) => {
             stop_loss: stopPrice,
             take_profit_1: tp1,
             take_profit_2: tp2,
-            confidence: 70,
+            confidence,
             trigger_reason: triggerResult.reason,
             entry_reason: entryResult.reason,
             sandbox: strategy.sandbox_mode,
