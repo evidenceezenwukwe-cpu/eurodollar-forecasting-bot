@@ -139,7 +139,6 @@ function checkBearishBOS(ctx: EvalContext): EvalResult {
 function checkInducement(ctx: EvalContext): EvalResult {
   if (ctx.candles.length < 8) return { triggered: false, reason: "Insufficient data" };
   
-  // Simplified: internal liquidity grab (minor swing taken before continuation)
   const recent = ctx.candles.slice(-5);
   const prevMinorLow = Math.min(...ctx.candles.slice(-8, -5).map(c => c.low));
   const prevMinorHigh = Math.max(...ctx.candles.slice(-8, -5).map(c => c.high));
@@ -150,6 +149,7 @@ function checkInducement(ctx: EvalContext): EvalResult {
   return {
     triggered: tookMinorLow || tookMinorHigh,
     reason: tookMinorLow ? "Inducement: minor low taken" : tookMinorHigh ? "Inducement: minor high taken" : "No inducement",
+    details: { direction: tookMinorLow ? "bullish" : tookMinorHigh ? "bearish" : "none" },
   };
 }
 
@@ -161,29 +161,37 @@ function checkFVGEntry(ctx: EvalContext): EvalResult {
   if (ctx.candles.length < 3) return { triggered: false, reason: "Insufficient data" };
   
   const [c1, c2, c3] = ctx.candles.slice(-3);
-  // Bullish FVG: gap between c1.high and c3.low
   const bullishFVG = c3.low > c1.high;
-  // Bearish FVG: gap between c1.low and c3.high
   const bearishFVG = c3.high < c1.low;
   
   return {
     triggered: bullishFVG || bearishFVG,
     reason: bullishFVG ? "Bullish FVG detected" : bearishFVG ? "Bearish FVG detected" : "No FVG",
+    details: { direction: bullishFVG ? "bullish" : bearishFVG ? "bearish" : "none" },
   };
 }
 
 function checkOrderBlockEntry(ctx: EvalContext): EvalResult {
   if (ctx.candles.length < 5) return { triggered: false, reason: "Insufficient data" };
   
-  // Simplified: last bearish candle before a bullish move (demand OB)
   const recent = ctx.candles.slice(-5);
   for (let i = 0; i < recent.length - 1; i++) {
     const isBearish = recent[i].close < recent[i].open;
     const nextBullish = recent[i + 1].close > recent[i + 1].open;
+    const isBullish = recent[i].close > recent[i].open;
+    const nextBearish = recent[i + 1].close < recent[i + 1].open;
     if (isBearish && nextBullish && recent[i + 1].close > recent[i].open) {
       return {
         triggered: true,
-        reason: `Order block at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}`,
+        reason: `Demand OB at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}`,
+        details: { direction: "bullish" },
+      };
+    }
+    if (isBullish && nextBearish && recent[i + 1].close < recent[i].open) {
+      return {
+        triggered: true,
+        reason: `Supply OB at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}`,
+        details: { direction: "bearish" },
       };
     }
   }
