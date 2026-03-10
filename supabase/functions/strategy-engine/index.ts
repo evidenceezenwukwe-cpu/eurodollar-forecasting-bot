@@ -219,8 +219,10 @@ function evaluateCondition(conditionName: string, candles: Candle[], lookback?: 
       const recent = candles.slice(-5);
       const prevLow = Math.min(...candles.slice(-8, -5).map(c => c.low));
       const prevHigh = Math.max(...candles.slice(-8, -5).map(c => c.high));
-      const took = recent.some(c => c.low < prevLow) || recent.some(c => c.high > prevHigh);
-      return { triggered: took, reason: took ? "Inducement taken" : "No inducement" };
+      const tookLow = recent.some(c => c.low < prevLow);
+      const tookHigh = recent.some(c => c.high > prevHigh);
+      const took = tookLow || tookHigh;
+      return { triggered: took, reason: took ? "Inducement taken" : "No inducement", details: { direction: tookLow ? "bullish" : tookHigh ? "bearish" : "none" } };
     },
     checkInducementTap: () => fnMap.checkInducement(),
     checkFVGEntry: () => {
@@ -228,14 +230,20 @@ function evaluateCondition(conditionName: string, candles: Candle[], lookback?: 
       const [c1, , c3] = candles.slice(-3);
       const bull = c3.low > c1.high;
       const bear = c3.high < c1.low;
-      return { triggered: bull || bear, reason: bull ? "Bullish FVG" : bear ? "Bearish FVG" : "No FVG" };
+      return { triggered: bull || bear, reason: bull ? "Bullish FVG" : bear ? "Bearish FVG" : "No FVG", details: { direction: bull ? "bullish" : bear ? "bearish" : "none" } };
     },
     checkOrderBlockEntry: () => {
       if (candles.length < 5) return { triggered: false, reason: "Insufficient data" };
       const recent = candles.slice(-5);
       for (let i = 0; i < recent.length - 1; i++) {
-        if (recent[i].close < recent[i].open && recent[i + 1].close > recent[i + 1].open && recent[i + 1].close > recent[i].open)
-          return { triggered: true, reason: `Order block at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}` };
+        const isBearish = recent[i].close < recent[i].open;
+        const nextBullish = recent[i + 1].close > recent[i + 1].open;
+        const isBullish = recent[i].close > recent[i].open;
+        const nextBearish = recent[i + 1].close < recent[i + 1].open;
+        if (isBearish && nextBullish && recent[i + 1].close > recent[i].open)
+          return { triggered: true, reason: `Demand OB at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}`, details: { direction: "bullish" } };
+        if (isBullish && nextBearish && recent[i + 1].close < recent[i].open)
+          return { triggered: true, reason: `Supply OB at ${recent[i].low.toFixed(5)}-${recent[i].high.toFixed(5)}`, details: { direction: "bearish" } };
       }
       return { triggered: false, reason: "No order block" };
     },
