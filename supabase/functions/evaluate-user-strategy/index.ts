@@ -439,13 +439,41 @@ serve(async (req) => {
             continue;
           }
 
-          // Calculate levels
+          // ===== Bug Fix #2: HTF Bias Evaluation =====
+          const rules_htf = rules.htf_bias;
+          let htfAligned = false;
+          if (rules_htf) {
+            const { data: htfCandles } = await supabase
+              .from('price_history')
+              .select('open, high, low, close, timestamp')
+              .eq('symbol', pair.symbol)
+              .eq('timeframe', rules_htf.timeframe || '1d')
+              .order('timestamp', { ascending: true })
+              .limit(30);
+
+            if (htfCandles && htfCandles.length >= 20) {
+              const htfBiasResult = evaluateHTFBias(htfCandles as Candle[], rules_htf.condition);
+              if (!htfBiasResult.aligned) {
+                logs.push({
+                  strategy_id: strategy.id, symbol: pair.symbol,
+                  stage: 'htf_bias', result: htfBiasResult.reason,
+                });
+                continue;
+              }
+              htfAligned = true;
+            }
+          }
+
+          // ===== Bug Fix #1: Direction Detection =====
           const lastCandle = entryCandles[entryCandles.length - 1] as Candle;
-          const direction = rules.entry.condition.includes('bullish') ? 'bullish' : 'bearish';
+          const direction = inferDirection(entryResult, triggerResult, lastCandle);
           const entryPrice = lastCandle.close;
           const stopPrice = calculateStop(rules.stop, entryCandles as Candle[], direction);
           const tp1 = stopPrice ? calculateTP(rules.tp.tp1, entryPrice, stopPrice, triggerCandles as Candle[], direction) : null;
           const tp2 = rules.tp.tp2 && stopPrice ? calculateTP(rules.tp.tp2, entryPrice, stopPrice, triggerCandles as Candle[], direction) : null;
+
+          // ===== Bug Fix #3: Dynamic Confidence =====
+          const confidence = calculateDynamicConfidence(triggerResult, entryResult, rules, htfAligned);
 
           const signal = {
             strategy_id: strategy.id,
