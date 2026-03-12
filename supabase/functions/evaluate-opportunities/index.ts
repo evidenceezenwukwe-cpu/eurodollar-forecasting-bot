@@ -332,7 +332,7 @@ serve(async (req) => {
       const isExpired = new Date(opp.expires_at) < new Date();
       
       // Evaluate outcome
-      const { outcome, outcomePrice, outcomeAt } = evaluateOutcome(
+      const { outcome, outcomePrice, outcomeAt, triggeredAt } = evaluateOutcome(
         opp as Opportunity,
         priceHistory.map(p => ({
           timestamp: p.timestamp,
@@ -342,6 +342,14 @@ serve(async (req) => {
         })),
         isExpired
       );
+
+      // If entry was triggered, update triggered_at on the opportunity
+      if (triggeredAt && !opp.triggered_at) {
+        await supabase
+          .from('trading_opportunities')
+          .update({ triggered_at: triggeredAt })
+          .eq('id', opp.id);
+      }
 
       // Skip if still active and no SL/TP hit yet
       if (outcome === 'PENDING') {
