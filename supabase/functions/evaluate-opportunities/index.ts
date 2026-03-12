@@ -43,32 +43,51 @@ function createPatternHash(patterns: string[], signalType: string): string {
   return `${signalType}:${sortedPatterns}`;
 }
 
-// Determine outcome by checking if SL or TP was hit
+// Determine outcome by checking if entry was reached, THEN if SL or TP was hit
 function evaluateOutcome(
   opportunity: Opportunity,
   priceHistory: PricePoint[],
   isExpired: boolean
-): { outcome: 'WIN' | 'LOSS' | 'EXPIRED' | 'PENDING'; outcomePrice: number; outcomeAt: string } {
+): { outcome: 'WIN' | 'LOSS' | 'EXPIRED' | 'PENDING'; outcomePrice: number; outcomeAt: string; triggeredAt: string | null } {
   const { signal_type, entry_price, stop_loss, take_profit_1 } = opportunity;
   
+  let entryTriggered = false;
+  let triggeredAt: string | null = null;
+
   for (const point of priceHistory) {
+    // Step 1: Check if entry price was actually reached (trade triggered)
+    if (!entryTriggered) {
+      if (signal_type === 'BUY' && point.low <= entry_price) {
+        // Price dipped to or below entry — BUY order would have filled
+        entryTriggered = true;
+        triggeredAt = point.timestamp;
+      } else if (signal_type === 'SELL' && point.high >= entry_price) {
+        // Price rose to or above entry — SELL order would have filled
+        entryTriggered = true;
+        triggeredAt = point.timestamp;
+      }
+      // If entry not yet triggered on this candle, skip SL/TP checks
+      if (!entryTriggered) continue;
+    }
+
+    // Step 2: Entry is triggered — now check SL/TP
     if (signal_type === 'BUY') {
       // Check if stop loss was hit first
       if (stop_loss && point.low <= stop_loss) {
-        return { outcome: 'LOSS', outcomePrice: stop_loss, outcomeAt: point.timestamp };
+        return { outcome: 'LOSS', outcomePrice: stop_loss, outcomeAt: point.timestamp, triggeredAt };
       }
       // Check if take profit was hit
       if (take_profit_1 && point.high >= take_profit_1) {
-        return { outcome: 'WIN', outcomePrice: take_profit_1, outcomeAt: point.timestamp };
+        return { outcome: 'WIN', outcomePrice: take_profit_1, outcomeAt: point.timestamp, triggeredAt };
       }
     } else if (signal_type === 'SELL') {
       // Check if stop loss was hit first
       if (stop_loss && point.high >= stop_loss) {
-        return { outcome: 'LOSS', outcomePrice: stop_loss, outcomeAt: point.timestamp };
+        return { outcome: 'LOSS', outcomePrice: stop_loss, outcomeAt: point.timestamp, triggeredAt };
       }
       // Check if take profit was hit
       if (take_profit_1 && point.low <= take_profit_1) {
-        return { outcome: 'WIN', outcomePrice: take_profit_1, outcomeAt: point.timestamp };
+        return { outcome: 'WIN', outcomePrice: take_profit_1, outcomeAt: point.timestamp, triggeredAt };
       }
     }
   }
@@ -76,12 +95,14 @@ function evaluateOutcome(
   // Neither SL nor TP was hit
   const lastPrice = priceHistory[priceHistory.length - 1]?.close || entry_price;
   
-  // If expired, mark as EXPIRED. If still active, return PENDING (no change needed yet)
   if (isExpired) {
+    // If entry was never triggered, it's EXPIRED (never entered the trade)
+    // If entry was triggered but SL/TP never hit, also EXPIRED
     return { 
       outcome: 'EXPIRED', 
       outcomePrice: lastPrice, 
-      outcomeAt: new Date().toISOString() 
+      outcomeAt: new Date().toISOString(),
+      triggeredAt
     };
   }
   
@@ -89,7 +110,8 @@ function evaluateOutcome(
   return { 
     outcome: 'PENDING', 
     outcomePrice: lastPrice, 
-    outcomeAt: '' 
+    outcomeAt: '',
+    triggeredAt
   };
 }
 

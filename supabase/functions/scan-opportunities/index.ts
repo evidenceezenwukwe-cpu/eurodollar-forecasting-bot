@@ -651,34 +651,33 @@ function calculateCRTConfidence(
   m15Entry: M15Entry,
   dailySR: { support: number[]; resistance: number[] }
 ): number {
-  let confidence = 40; // Base
+  // Conservative 50-58 model aligned with strategy engine
+  let confidence = 50; // Base — CRT prerequisites (H4 sweep + M15 BOS) already met
 
-  // Weekly rejection is stronger than Daily
+  // HTF rejection quality: weekly is stronger than daily
   if (htfBias.rejectionTimeframe === 'Weekly') {
-    confidence += 15;
+    confidence += 3;
   } else {
-    confidence += 10;
+    confidence += 1;
   }
 
-  // H4 sweep confirmed (always true if we reach here)
-  confidence += 20;
+  // H4 sweep confirmed (always true here, modest bonus)
+  confidence += 2;
 
-  // M15 BOS confirmed (always true if we reach here)
-  confidence += 20;
-
-  // M15 Inducement found
+  // M15 Inducement found — additional confluence
   if (m15Entry.hasInducement) {
-    confidence += 10;
+    confidence += 2;
   }
 
   // Rejection at a key S/R level
   const allLevels = [...dailySR.support, ...dailySR.resistance];
   const nearKeyLevel = allLevels.some(l => Math.abs(htfBias.rejectionLevel - l) / l < 0.003);
   if (nearKeyLevel) {
-    confidence += 10;
+    confidence += 2;
   }
 
-  return Math.min(85, confidence);
+  // Hard cap at 58 per documented confidence model
+  return Math.min(58, Math.max(50, confidence));
 }
 
 // =====================================================================
