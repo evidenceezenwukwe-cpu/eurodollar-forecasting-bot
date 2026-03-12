@@ -1,86 +1,58 @@
 
-# Fix: Unblock Signals & Ensure Telegram Delivery
 
-## Root Cause
+## Two Issues Found
 
-The Telegram notification code (lines 976-1002) is correctly implemented but **never executes** because all signals are blocked earlier at line 855:
+### Issue 1: Confidence Always 85%
 
-```typescript
-if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2) {
-  console.log(`[${symbol}] No high-probability opportunity detected`);
-  return; // ← Telegram code never reached
-}
-```
+**Root cause**: `calculateCRTConfidence()` in `scan-opportunities/index.ts` (line 648-681).
 
-With the recent fix making confidence scores realistic (max ~58%), this threshold blocks 100% of valid signals.
+The scoring adds up: base 40 + HTF rejection (10-15) + H4 sweep (20) + M15 BOS (20) = **90-95 minimum**, then caps at `Math.min(85, confidence)`. Since H4 sweep and M15 BOS are prerequisites to reach this function, every signal trivially scores the maximum.
 
-## Solution: Two Changes
+The dynamic 50-58 model was implemented in `strategy-engine/index.ts` (user strategies) but **never applied to the main CRT scanner** which generates the majority of signals.
 
-### Change 1: Lower Confidence Threshold (Critical)
+**Fix**: Rewrite `calculateCRTConfidence()` to use the same conservative 50-58 model:
+- Base: 50
+- HTF weekly rejection: +3 (daily: +1)
+- H4 sweep confirmed: +2 (always present, included in base expectation)
+- M15 inducement found: +2
+- Near key S/R level: +2
+- Cap at 58
 
-**File**: `supabase/functions/scan-opportunities/index.ts`  
-**Line 855**
+This aligns the CRT scanner with the strategy engine and the documented confidence model.
 
-```typescript
-// FROM:
-if (!analysis.signal || analysis.confidence < 60 || analysis.reasons.length < 2)
+### Issue 2: Daily Report / Evaluation Doesn't Check If Entry Was Reached
 
-// TO:
-if (!analysis.signal || analysis.confidence < 50 || analysis.reasons.length < 2)
-```
+**Root cause**: `evaluateOutcome()` in `evaluate-opportunities/index.ts` (lines 47-94).
 
-### Change 2: Add Modest Confluence Bonus
+The function iterates through price candles and checks if SL or TP was ever hit, but it **never verifies the entry price was actually reached first**. This means:
 
-Restore the trading concept that multiple confirmations = better setup, but with conservative values.
+- A BUY signal at 1.0850 with TP at 1.0900 — if price went from 1.0870 straight to 1.0900 without ever dipping to 1.0850, the trade was **never triggered** but gets marked as WIN.
+- A SELL signal at 157.500 — if price never rose to 157.500, SL/TP checks are meaningless.
 
-**Location**: Around lines 695-710 (after weighted average calculation)
-
-```typescript
-// After calculating base confidence from weighted average:
-let confidence = totalWeight > 0 ? weightedSum / totalWeight : 50;
-
-// Add modest confluence bonus for multiple Tier 1 patterns
-const tier1Patterns = patternsWithWinRates.filter(p => p.tier === 1);
-if (tier1Patterns.length > 1) {
-  const confluenceBonus = Math.min((tier1Patterns.length - 1) * 2, 6);
-  confidence += confluenceBonus;
-  reasons.push(`🎯 Confluence: ${tier1Patterns.length} confirming patterns (+${confluenceBonus}%)`);
-}
-
-// Cap at reasonable maximum
-confidence = Math.min(58, Math.max(45, confidence));
-```
-
-## Expected Signal Flow After Fix
+**Fix**: Add an entry-reached check before SL/TP evaluation:
 
 ```text
-Pattern Detection → Confidence Calculation (50-58%)
-        ↓
-Threshold Check (>= 50%) ✅ PASSES
-        ↓
-Insert to Database ✅
-        ↓
-Send Telegram Notification ✅ ← NOW REACHED
+For each price candle (chronological):
+  1. If trade NOT yet triggered:
+     - BUY: check if candle.low <= entry_price (price dipped to entry)
+     - SELL: check if candle.high >= entry_price (price rose to entry)
+     - If triggered, record triggered_at timestamp, continue
+  2. If trade IS triggered:
+     - Check SL/TP as before
+  3. If expired without ever triggering:
+     - outcome = EXPIRED (not WIN or LOSS)
 ```
 
-## Confidence Examples After Fix
+The daily report itself (`send-daily-report/index.ts`) is fine — it just reads the outcomes already stored. The fix is entirely in the evaluation logic.
 
-| Setup | Base Win Rate | Confluence | Final Confidence |
-|-------|---------------|------------|------------------|
-| 1 Tier 1 pattern | 52% | +0% | 52% |
-| 2 Tier 1 patterns | 52% | +2% | 54% |
-| 3 Tier 1 patterns | 52% | +4% | 56% |
-| 4 Tier 1 patterns | 52% | +6% (cap) | 58% |
+**Side effect on daily report pips calculation**: The daily report (line 66-72) assumes WIN pips = |TP1 - entry| and LOSS pips = |SL - entry|. This is correct for properly evaluated trades. No change needed there once evaluation is fixed.
 
-## Files to Modify
+### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `supabase/functions/scan-opportunities/index.ts` | Lower threshold to 50%, add +2%/pattern confluence bonus (capped at +6%) |
+| File | Change |
+|------|--------|
+| `supabase/functions/scan-opportunities/index.ts` | Rewrite `calculateCRTConfidence()` to use 50-58 range |
+| `supabase/functions/evaluate-opportunities/index.ts` | Add entry-price-reached check before SL/TP evaluation in `evaluateOutcome()`, update opportunity `triggered_at` |
 
-## Verification Steps
+### No database changes needed.
 
-After deployment:
-1. Check edge function logs for "Created new opportunity" messages
-2. Check logs for "Telegram notification sent" messages
-3. Confirm signal appears in Telegram channel
