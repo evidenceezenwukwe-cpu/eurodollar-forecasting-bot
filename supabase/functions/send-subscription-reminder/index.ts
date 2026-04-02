@@ -70,7 +70,7 @@ serve(async (req) => {
         targetDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
         emailSubject = 'Your ForexTell AI subscription expires in 3 days';
         emailHeadline = 'Your Subscription Expires Soon';
-        emailMessage = 'Your ForexTell AI subscription will expire in <strong>3 days</strong>. Renew now to keep your access to our EUR/USD decision engine.';
+        emailMessage = 'Your ForexTell AI subscription will expire in <strong>3 days</strong>. Renew now to keep your access to our forex decision engine.';
         break;
       case '1_day':
         targetDate = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
