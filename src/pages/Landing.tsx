@@ -143,7 +143,7 @@ const Landing = () => {
                 </div>
                 <div>
                   <h1 className="font-semibold text-lg leading-none">ForexTell AI</h1>
-                  <p className="text-xs text-muted-foreground hidden sm:block">EUR/USD Decision Engine</p>
+                  <p className="text-xs text-muted-foreground hidden sm:block">Forex Decision Engine</p>
                 </div>
               </div>
 
