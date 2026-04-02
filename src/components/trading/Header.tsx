@@ -15,7 +15,7 @@ export const Header = memo(function Header() {
           </div>
           <div>
             <h1 className="font-semibold text-lg leading-none">ForexAI</h1>
-            <p className="text-xs text-muted-foreground">EUR/USD Prediction</p>
+            <p className="text-xs text-muted-foreground">Forex Decision Engine</p>
           </div>
         </div>
 

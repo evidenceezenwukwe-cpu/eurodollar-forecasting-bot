@@ -142,7 +142,7 @@ serve(async (req) => {
 
     const systemPrompt = type === "morning" 
       ? `You are a professional forex analyst creating a morning bias post for X (Twitter).
-Generate a concise, actionable EUR/USD daily bias post that includes:
+Generate a concise, actionable forex daily bias post that includes:
 - Clear directional bias (BULLISH/BEARISH/NEUTRAL)
 - Confidence level (percentage)
 - Key invalidation level (where bias flips)
@@ -152,7 +152,7 @@ Generate a concise, actionable EUR/USD daily bias post that includes:
 Keep it under 280 characters for the main content, with key levels on separate lines.
 Use clean formatting with bullet points (•).`
       : `You are a professional forex analyst creating an evening recap post for X (Twitter).
-Generate a concise EUR/USD end-of-day recap that includes:
+Generate a concise forex end-of-day recap that includes:
 - Whether the bias was correct
 - Actual high and low of the day
 - How it compared to targets
@@ -160,7 +160,7 @@ Generate a concise EUR/USD end-of-day recap that includes:
 
 Keep it under 280 characters. Be honest about results.`;
 
-    const userContent = `Generate a ${type} post for EUR/USD based on this data:
+    const userContent = `Generate a ${type} post for forex based on this data:
 
 ${JSON.stringify(analysisContext, null, 2)}
 

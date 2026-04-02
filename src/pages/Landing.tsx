@@ -143,7 +143,7 @@ const Landing = () => {
                 </div>
                 <div>
                   <h1 className="font-semibold text-lg leading-none">ForexTell AI</h1>
-                  <p className="text-xs text-muted-foreground hidden sm:block">EUR/USD Decision Engine</p>
+                  <p className="text-xs text-muted-foreground hidden sm:block">Forex Decision Engine</p>
                 </div>
               </div>
 
@@ -178,13 +178,13 @@ const Landing = () => {
                 className="mb-8 px-4 py-2 rounded-full text-sm font-medium bg-primary/5 text-primary border-primary/20 hover:bg-primary/10"
               >
                 <Zap className="h-3.5 w-3.5 mr-2" />
-                EUR/USD Only • Focused Precision
+                Multi-Pair • Focused Precision
               </Badge>
               
               <h1 className="text-4xl sm:text-5xl lg:text-7xl font-bold mb-8 leading-[1.1] tracking-tight animate-fade-in-up">
                 Institutional-Style
                 <br />
-                <span className="text-gradient-primary">EUR/USD Decision Engine</span>
+                <span className="text-gradient-primary">Forex Decision Engine</span>
               </h1>
               
               <p className="text-lg sm:text-xl text-muted-foreground mb-12 max-w-2xl mx-auto leading-relaxed">
@@ -224,8 +224,8 @@ const Landing = () => {
                     <div className="text-sm text-muted-foreground mt-1">Predictions</div>
                   </div>
                   <div className="px-8 py-4">
-                    <div className="text-4xl lg:text-5xl font-bold text-primary">EUR/USD</div>
-                    <div className="text-sm text-muted-foreground mt-1">Focus Pair</div>
+                    <div className="text-4xl lg:text-5xl font-bold text-primary">12+</div>
+                    <div className="text-sm text-muted-foreground mt-1">Currency Pairs</div>
                   </div>
                 </div>
               )}

@@ -181,7 +181,7 @@ const DailyBiasPanel = () => {
         <CardHeader>
           <CardTitle className="text-lg">Daily Price Action (48H)</CardTitle>
           <CardDescription>
-            EUR/USD for {format(new Date(), "MMMM d, yyyy")}
+            Forex pairs for {format(new Date(), "MMMM d, yyyy")}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -231,7 +231,7 @@ const DailyBiasPanel = () => {
             placeholder="Morning bias will appear here...
 
 Example format:
-EUR/USD Daily Bias - Jan 6, 2026
+Daily Bias - Jan 6, 2026
 
 Direction: BEARISH
 Confidence: 70%
@@ -278,7 +278,7 @@ Updates at market close."
             placeholder="Evening recap will appear here...
 
 Example format:
-EUR/USD Recap - Jan 6, 2026
+Daily Recap - Jan 6, 2026
 
 Bias: BEARISH ✅ Called it right
 High: 1.1752 (within 8 pips of invalidation)
@@ -286,7 +286,7 @@ Low: 1.1718 (hit Target 1)
 
 Tomorrow: Watching for continuation
 
-Follow for daily EUR/USD analysis."
+Follow for daily forex analysis."
             className="min-h-[220px] font-mono text-sm"
           />
         </CardContent>
