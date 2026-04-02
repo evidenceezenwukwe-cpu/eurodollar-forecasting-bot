@@ -278,7 +278,7 @@ Updates at market close."
             placeholder="Evening recap will appear here...
 
 Example format:
-EUR/USD Recap - Jan 6, 2026
+Daily Recap - Jan 6, 2026
 
 Bias: BEARISH ✅ Called it right
 High: 1.1752 (within 8 pips of invalidation)
