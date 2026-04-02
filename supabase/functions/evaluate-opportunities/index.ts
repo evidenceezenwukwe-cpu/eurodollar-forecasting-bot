@@ -323,12 +323,14 @@ serve(async (req) => {
 
       // Fetch price history since the opportunity was created (use the opportunity's symbol)
       const opportunitySymbol = opp.symbol || 'EUR/USD';
+      const nowISO = new Date().toISOString();
       const { data: priceHistory, error: priceError } = await supabase
         .from('price_history')
         .select('timestamp, high, low, close')
         .eq('symbol', opportunitySymbol)
         .eq('timeframe', '15min')
         .gte('timestamp', opp.created_at)
+        .lte('timestamp', nowISO)
         .order('timestamp', { ascending: true });
 
       if (priceError || !priceHistory || priceHistory.length === 0) {
