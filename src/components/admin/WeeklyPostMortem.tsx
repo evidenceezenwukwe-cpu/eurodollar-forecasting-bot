@@ -153,7 +153,7 @@ const WeeklyPostMortem = () => {
           <CardHeader>
             <CardTitle className="text-lg">Weekly Price Action</CardTitle>
             <CardDescription>
-              EUR/USD from {format(dateRange.from, "MMM dd")} to {dateRange.to ? format(dateRange.to, "MMM dd, yyyy") : ""}
+              Price action from {format(dateRange.from, "MMM dd")} to {dateRange.to ? format(dateRange.to, "MMM dd, yyyy") : ""}
             </CardDescription>
           </CardHeader>
           <CardContent>

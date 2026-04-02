@@ -82,7 +82,7 @@ serve(async (req) => {
         targetDate = now;
         emailSubject = 'Your ForexTell AI subscription has expired';
         emailHeadline = 'Your Subscription Has Expired';
-        emailMessage = 'Your ForexTell AI subscription has expired. Renew now to continue receiving your daily EUR/USD trading bias.';
+        emailMessage = 'Your ForexTell AI subscription has expired. Renew now to continue receiving your daily forex trading bias.';
         break;
       default:
         throw new Error('Invalid reminder type');

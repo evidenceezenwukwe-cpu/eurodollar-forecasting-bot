@@ -286,7 +286,7 @@ Low: 1.1718 (hit Target 1)
 
 Tomorrow: Watching for continuation
 
-Follow for daily EUR/USD analysis."
+Follow for daily forex analysis."
             className="min-h-[220px] font-mono text-sm"
           />
         </CardContent>

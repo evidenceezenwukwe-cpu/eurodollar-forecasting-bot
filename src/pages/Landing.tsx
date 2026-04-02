@@ -224,8 +224,8 @@ const Landing = () => {
                     <div className="text-sm text-muted-foreground mt-1">Predictions</div>
                   </div>
                   <div className="px-8 py-4">
-                    <div className="text-4xl lg:text-5xl font-bold text-primary">EUR/USD</div>
-                    <div className="text-sm text-muted-foreground mt-1">Focus Pair</div>
+                    <div className="text-4xl lg:text-5xl font-bold text-primary">12+</div>
+                    <div className="text-sm text-muted-foreground mt-1">Currency Pairs</div>
                   </div>
                 </div>
               )}
