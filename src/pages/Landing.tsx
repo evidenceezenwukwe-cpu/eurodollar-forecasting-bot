@@ -184,7 +184,7 @@ const Landing = () => {
               <h1 className="text-4xl sm:text-5xl lg:text-7xl font-bold mb-8 leading-[1.1] tracking-tight animate-fade-in-up">
                 Institutional-Style
                 <br />
-                <span className="text-gradient-primary">EUR/USD Decision Engine</span>
+                <span className="text-gradient-primary">Forex Decision Engine</span>
               </h1>
               
               <p className="text-lg sm:text-xl text-muted-foreground mb-12 max-w-2xl mx-auto leading-relaxed">
