@@ -350,7 +350,8 @@ serve(async (req) => {
           low: Number(p.low),
           close: Number(p.close)
         })),
-        isExpired
+        isExpired,
+        opp.expires_at
       );
 
       // If entry was triggered, update triggered_at on the opportunity
