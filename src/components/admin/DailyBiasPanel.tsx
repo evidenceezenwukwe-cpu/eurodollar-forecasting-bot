@@ -181,7 +181,7 @@ const DailyBiasPanel = () => {
         <CardHeader>
           <CardTitle className="text-lg">Daily Price Action (48H)</CardTitle>
           <CardDescription>
-            EUR/USD for {format(new Date(), "MMMM d, yyyy")}
+            Forex pairs for {format(new Date(), "MMMM d, yyyy")}
           </CardDescription>
         </CardHeader>
         <CardContent>
