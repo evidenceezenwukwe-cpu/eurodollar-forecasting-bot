@@ -178,7 +178,7 @@ const Landing = () => {
                 className="mb-8 px-4 py-2 rounded-full text-sm font-medium bg-primary/5 text-primary border-primary/20 hover:bg-primary/10"
               >
                 <Zap className="h-3.5 w-3.5 mr-2" />
-                EUR/USD Only • Focused Precision
+                Multi-Pair • Focused Precision
               </Badge>
               
               <h1 className="text-4xl sm:text-5xl lg:text-7xl font-bold mb-8 leading-[1.1] tracking-tight animate-fade-in-up">
