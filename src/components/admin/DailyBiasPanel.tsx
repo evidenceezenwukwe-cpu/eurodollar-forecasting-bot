@@ -231,7 +231,7 @@ const DailyBiasPanel = () => {
             placeholder="Morning bias will appear here...
 
 Example format:
-EUR/USD Daily Bias - Jan 6, 2026
+Daily Bias - Jan 6, 2026
 
 Direction: BEARISH
 Confidence: 70%
