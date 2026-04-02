@@ -47,16 +47,24 @@ function createPatternHash(patterns: string[], signalType: string): string {
 function evaluateOutcome(
   opportunity: Opportunity,
   priceHistory: PricePoint[],
-  isExpired: boolean
+  isExpired: boolean,
+  expiresAt: string
 ): { outcome: 'WIN' | 'LOSS' | 'EXPIRED' | 'PENDING'; outcomePrice: number; outcomeAt: string; triggeredAt: string | null } {
   const { signal_type, entry_price, stop_loss, take_profit_1 } = opportunity;
   
   let entryTriggered = false;
   let triggeredAt: string | null = null;
+  const expiryTime = new Date(expiresAt).getTime();
 
   for (const point of priceHistory) {
+    const pointTime = new Date(point.timestamp).getTime();
+
     // Step 1: Check if entry price was actually reached (trade triggered)
     if (!entryTriggered) {
+      // Stop looking for entry if this candle is past expiry
+      if (pointTime > expiryTime) {
+        break; // Entry never reached before expiry
+      }
       if (signal_type === 'BUY' && point.low <= entry_price) {
         // Price dipped to or below entry — BUY order would have filled
         entryTriggered = true;
@@ -315,12 +323,14 @@ serve(async (req) => {
 
       // Fetch price history since the opportunity was created (use the opportunity's symbol)
       const opportunitySymbol = opp.symbol || 'EUR/USD';
+      const nowISO = new Date().toISOString();
       const { data: priceHistory, error: priceError } = await supabase
         .from('price_history')
         .select('timestamp, high, low, close')
         .eq('symbol', opportunitySymbol)
         .eq('timeframe', '15min')
         .gte('timestamp', opp.created_at)
+        .lte('timestamp', nowISO)
         .order('timestamp', { ascending: true });
 
       if (priceError || !priceHistory || priceHistory.length === 0) {
@@ -340,7 +350,8 @@ serve(async (req) => {
           low: Number(p.low),
           close: Number(p.close)
         })),
-        isExpired
+        isExpired,
+        opp.expires_at
       );
 
       // If entry was triggered, update triggered_at on the opportunity
