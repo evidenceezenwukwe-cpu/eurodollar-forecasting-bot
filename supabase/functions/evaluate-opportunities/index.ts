@@ -47,16 +47,24 @@ function createPatternHash(patterns: string[], signalType: string): string {
 function evaluateOutcome(
   opportunity: Opportunity,
   priceHistory: PricePoint[],
-  isExpired: boolean
+  isExpired: boolean,
+  expiresAt: string
 ): { outcome: 'WIN' | 'LOSS' | 'EXPIRED' | 'PENDING'; outcomePrice: number; outcomeAt: string; triggeredAt: string | null } {
   const { signal_type, entry_price, stop_loss, take_profit_1 } = opportunity;
   
   let entryTriggered = false;
   let triggeredAt: string | null = null;
+  const expiryTime = new Date(expiresAt).getTime();
 
   for (const point of priceHistory) {
+    const pointTime = new Date(point.timestamp).getTime();
+
     // Step 1: Check if entry price was actually reached (trade triggered)
     if (!entryTriggered) {
+      // Stop looking for entry if this candle is past expiry
+      if (pointTime > expiryTime) {
+        break; // Entry never reached before expiry
+      }
       if (signal_type === 'BUY' && point.low <= entry_price) {
         // Price dipped to or below entry — BUY order would have filled
         entryTriggered = true;
