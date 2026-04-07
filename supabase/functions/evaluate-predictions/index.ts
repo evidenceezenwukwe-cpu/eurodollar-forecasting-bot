@@ -80,17 +80,22 @@ serve(async (req) => {
     } catch {
       currentPrice = 0;
     }
-    
-    if (!currentPrice || typeof currentPrice !== 'number') {
-      console.log('No price provided, fetching from Twelve Data...');
-      currentPrice = await fetchCurrentPrice();
-    }
-
-    console.log(`Evaluating predictions against current price: ${currentPrice}`);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    
+    if (!currentPrice || typeof currentPrice !== 'number') {
+      console.log('No price provided, fetching from cache...');
+      const cached = await fetchCurrentPriceFromCache(supabase);
+      if (cached) {
+        currentPrice = cached;
+      } else {
+        throw new Error('No cached price available for evaluation');
+      }
+    }
+
+    console.log(`Evaluating predictions against current price: ${currentPrice}`);
 
     // Fetch pending predictions (no outcome yet)
     const { data: pendingPredictions, error: fetchError } = await supabase
@@ -114,13 +119,14 @@ serve(async (req) => {
       const expiresAt = new Date(prediction.expires_at);
       const isExpired = now > expiresAt;
       
-      // Fetch price history since prediction was made to check if TP/SL was EVER hit
+      // Fetch price history from cache since prediction was made
       let priceHistory: { high: number; low: number; current: number };
-      try {
-        priceHistory = await fetchPriceHistory(createdAt);
+      const cachedHistory = await fetchPriceHistoryFromCache(supabase, createdAt);
+      if (cachedHistory) {
+        priceHistory = cachedHistory;
         console.log(`Price history for prediction ${prediction.id}: High=${priceHistory.high.toFixed(5)}, Low=${priceHistory.low.toFixed(5)}, Current=${priceHistory.current.toFixed(5)}`);
-      } catch (e) {
-        console.error(`Failed to fetch price history: ${e}`);
+      } else {
+        console.log(`No cached history for prediction ${prediction.id}, using current price`);
         priceHistory = { high: currentPrice, low: currentPrice, current: currentPrice };
       }
       
