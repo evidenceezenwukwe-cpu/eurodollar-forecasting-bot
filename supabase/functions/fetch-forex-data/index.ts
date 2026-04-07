@@ -145,7 +145,7 @@ function getApiKeys(): string[] {
 }
 
 // Rotate keys based on hour + attempt number to distribute load
-function selectApiKey(keys: string[], attempt: number = 0): { key: string; index: number } {
+function selectApiKey(keys: string[], attempt: number = 0, exhaustedIndices: Set<number> = new Set()): { key: string; index: number } {
   if (keys.length === 0) {
     throw new Error("No API keys available");
   }
@@ -156,7 +156,14 @@ function selectApiKey(keys: string[], attempt: number = 0): { key: string; index
   
   // Rotate every 5 minutes within each hour, plus attempt offset for retries
   const rotationSlot = Math.floor(minute / 5);
-  const index = (hour * 12 + rotationSlot + attempt) % keys.length;
+  let index = (hour * keys.length + rotationSlot + attempt) % keys.length;
+  
+  // Skip exhausted keys
+  let checked = 0;
+  while (exhaustedIndices.has(index) && checked < keys.length) {
+    index = (index + 1) % keys.length;
+    checked++;
+  }
   
   return { key: keys[index], index };
 }
@@ -269,10 +276,11 @@ serve(async (req) => {
     outputsize: number, 
     keys: string[]
   ): Promise<{ data: any; keyIndex: number } | { error: string; isQuotaError: boolean }> => {
-    const maxAttempts = Math.min(keys.length, 3); // Try up to 3 different keys
+    const maxAttempts = keys.length; // Try all available keys
+    const exhaustedIndices = new Set<number>();
     
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const { key, index } = selectApiKey(keys, attempt);
+      const { key, index } = selectApiKey(keys, attempt, exhaustedIndices);
       console.log(`API attempt ${attempt + 1}/${maxAttempts} using key index ${index} for ${symbol}`);
       
       try {
@@ -287,6 +295,7 @@ serve(async (req) => {
           // If quota error, try next key
           if (isTwelveDataQuotaError(message)) {
             console.log(`Key ${index} quota exceeded, trying next key...`);
+            exhaustedIndices.add(index);
             continue;
           }
           
