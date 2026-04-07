@@ -6,69 +6,61 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Fetch current EUR/USD price from Twelve Data
-async function fetchCurrentPrice(): Promise<number> {
-  const apiKey = Deno.env.get('TWELVE_DATA_API_KEY');
-  if (!apiKey) {
-    throw new Error('TWELVE_DATA_API_KEY not configured');
-  }
-
-  const response = await fetch(
-    `https://api.twelvedata.com/price?symbol=EUR/USD&apikey=${apiKey}`
-  );
+// Fetch current price from cached price_history table (no API call needed)
+async function fetchCurrentPriceFromCache(supabase: any, symbol: string = 'EUR/USD'): Promise<number | null> {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('close, timestamp')
+    .eq('symbol', symbol)
+    .eq('timeframe', '15min')
+    .lte('timestamp', new Date().toISOString())
+    .order('timestamp', { ascending: false })
+    .limit(1);
   
-  if (!response.ok) {
-    throw new Error(`Failed to fetch price: ${response.statusText}`);
-  }
-  
-  const data = await response.json();
-  if (data.code) {
-    throw new Error(`Twelve Data error: ${data.message}`);
+  if (error || !data || data.length === 0) {
+    console.log(`No cached price found for ${symbol}`);
+    return null;
   }
   
-  return parseFloat(data.price);
+  console.log(`Using cached price for ${symbol}: ${data[0].close} from ${data[0].timestamp}`);
+  return parseFloat(data[0].close);
 }
 
-// Fetch price history since prediction was made
-async function fetchPriceHistory(since: Date): Promise<{ high: number; low: number; current: number }> {
-  const apiKey = Deno.env.get('TWELVE_DATA_API_KEY');
-  if (!apiKey) {
-    throw new Error('TWELVE_DATA_API_KEY not configured');
-  }
-
-  // Calculate how many 15-min bars we need
+// Fetch price history from cached data since a given time
+async function fetchPriceHistoryFromCache(
+  supabase: any, 
+  since: Date, 
+  symbol: string = 'EUR/USD'
+): Promise<{ high: number; low: number; current: number } | null> {
   const now = new Date();
-  const minutesSince = Math.ceil((now.getTime() - since.getTime()) / (1000 * 60));
-  const outputSize = Math.min(Math.max(Math.ceil(minutesSince / 15), 10), 200);
-
-  const response = await fetch(
-    `https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=15min&outputsize=${outputSize}&apikey=${apiKey}`
-  );
   
-  if (!response.ok) {
-    throw new Error(`Failed to fetch price history: ${response.statusText}`);
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('high, low, close, timestamp')
+    .eq('symbol', symbol)
+    .eq('timeframe', '15min')
+    .gte('timestamp', since.toISOString())
+    .lte('timestamp', now.toISOString())
+    .order('timestamp', { ascending: false })
+    .limit(500);
+  
+  if (error || !data || data.length === 0) {
+    console.log(`No cached price history found for ${symbol} since ${since.toISOString()}`);
+    return null;
   }
-  
-  const data = await response.json();
-  if (data.code || !data.values) {
-    // Fall back to current price only
-    const current = await fetchCurrentPrice();
-    return { high: current, low: current, current };
-  }
-  
-  const values = data.values as Array<{ high: string; low: string; close: string }>;
   
   let high = -Infinity;
   let low = Infinity;
   
-  for (const candle of values) {
+  for (const candle of data) {
     const candleHigh = parseFloat(candle.high);
     const candleLow = parseFloat(candle.low);
     if (candleHigh > high) high = candleHigh;
     if (candleLow < low) low = candleLow;
   }
   
-  const current = parseFloat(values[0].close);
+  const current = parseFloat(data[0].close);
+  console.log(`Cached price history for ${symbol}: ${data.length} candles, High=${high.toFixed(5)}, Low=${low.toFixed(5)}, Current=${current.toFixed(5)}`);
   
   return { high, low, current };
 }
@@ -88,17 +80,22 @@ serve(async (req) => {
     } catch {
       currentPrice = 0;
     }
-    
-    if (!currentPrice || typeof currentPrice !== 'number') {
-      console.log('No price provided, fetching from Twelve Data...');
-      currentPrice = await fetchCurrentPrice();
-    }
-
-    console.log(`Evaluating predictions against current price: ${currentPrice}`);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    
+    if (!currentPrice || typeof currentPrice !== 'number') {
+      console.log('No price provided, fetching from cache...');
+      const cached = await fetchCurrentPriceFromCache(supabase);
+      if (cached) {
+        currentPrice = cached;
+      } else {
+        throw new Error('No cached price available for evaluation');
+      }
+    }
+
+    console.log(`Evaluating predictions against current price: ${currentPrice}`);
 
     // Fetch pending predictions (no outcome yet)
     const { data: pendingPredictions, error: fetchError } = await supabase
@@ -122,13 +119,14 @@ serve(async (req) => {
       const expiresAt = new Date(prediction.expires_at);
       const isExpired = now > expiresAt;
       
-      // Fetch price history since prediction was made to check if TP/SL was EVER hit
+      // Fetch price history from cache since prediction was made
       let priceHistory: { high: number; low: number; current: number };
-      try {
-        priceHistory = await fetchPriceHistory(createdAt);
+      const cachedHistory = await fetchPriceHistoryFromCache(supabase, createdAt);
+      if (cachedHistory) {
+        priceHistory = cachedHistory;
         console.log(`Price history for prediction ${prediction.id}: High=${priceHistory.high.toFixed(5)}, Low=${priceHistory.low.toFixed(5)}, Current=${priceHistory.current.toFixed(5)}`);
-      } catch (e) {
-        console.error(`Failed to fetch price history: ${e}`);
+      } else {
+        console.log(`No cached history for prediction ${prediction.id}, using current price`);
         priceHistory = { high: currentPrice, low: currentPrice, current: currentPrice };
       }
       

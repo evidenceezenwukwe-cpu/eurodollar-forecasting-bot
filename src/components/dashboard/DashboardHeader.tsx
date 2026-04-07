@@ -67,7 +67,7 @@ export const DashboardHeader = memo(function DashboardHeader({
             </div>
             <div>
               <h1 className="font-semibold text-lg leading-none">ForexTell AI</h1>
-              <p className="text-xs text-muted-foreground">EUR/USD Decision Engine</p>
+              <p className="text-xs text-muted-foreground">Forex Decision Engine</p>
             </div>
           </Link>
         </div>
