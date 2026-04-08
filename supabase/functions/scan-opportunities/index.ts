@@ -817,7 +817,30 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
 
   // ---- Signal Construction ----
   const signalType: 'BUY' | 'SELL' = htfBias.bias === 'BULLISH' ? 'BUY' : 'SELL';
-  const confidence = calculateCRTConfidence(htfBias, h4Sweep, m15Entry, dailySR);
+
+  // ---- NEW: Pair+Direction Blocklist Check ----
+  if (isBlockedPairDirection(symbol, signalType)) {
+    console.log(`[${symbol}] BLOCKED: ${symbol} ${signalType} is on the underperforming pair blocklist — skipping`);
+    return null;
+  }
+
+  // ---- NEW: Require Inducement Confirmation ----
+  if (!m15Entry.hasInducement) {
+    console.log(`[${symbol}] SKIPPED: No M15 Inducement detected — signals without inducement have 61.4% vs 78.4% win rate`);
+    return null;
+  }
+
+  // ---- NEW: Entry Distance Check ----
+  const currentPrice = m15Candles[m15Candles.length - 1].close;
+  const pipValue = getPipValue(symbol);
+  const entryDistancePips = Math.abs(currentPrice - m15Entry.entryPrice) / pipValue;
+  const maxDistPips = getMaxEntryDistancePips(symbol);
+  if (entryDistancePips > maxDistPips) {
+    console.log(`[${symbol}] SKIPPED: Entry too far from price (${entryDistancePips.toFixed(1)} pips > max ${maxDistPips} pips)`);
+    return null;
+  }
+
+  const confidence = calculateCRTConfidence(htfBias, h4Sweep, m15Entry, dailySR, symbol, signalType, entryDistancePips);
 
   // TP = opposite side of H4 range
   const takeProfit1 = signalType === 'SELL' ? h4Sweep.h4RangeLow : h4Sweep.h4RangeHigh;
