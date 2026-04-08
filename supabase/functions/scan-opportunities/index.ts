@@ -26,6 +26,49 @@ const DEFAULT_PROFILE: StrategyProfile = {
   settings: {},
 };
 
+// =====================================================================
+// Pair+Direction Blocklist — sub-50% win rate combos disabled
+// =====================================================================
+const BLOCKED_PAIR_DIRECTIONS: Record<string, string[]> = {
+  'XAU/USD': ['BUY'],
+  'EUR/GBP': ['SELL'],
+  'USD/CHF': ['BUY'],
+  'AUD/JPY': ['BUY'],
+  'EUR/JPY': ['SELL'],
+};
+
+// Strong pair+direction combos for confidence bonus
+const STRONG_PAIR_DIRECTIONS: Record<string, string[]> = {
+  'EUR/USD': ['BUY'],
+  'USD/JPY': ['SELL'],
+  'GBP/USD': ['SELL'],
+  'USD/CAD': ['SELL'],
+};
+
+// Max entry distance in pips per pair type
+const MAX_ENTRY_DISTANCE_PIPS: Record<string, number> = {
+  'XAU/USD': 200,
+  'USD/JPY': 50,
+  'EUR/JPY': 50,
+  'GBP/JPY': 50,
+  'AUD/JPY': 50,
+  // All other pairs default to 30
+};
+
+function getMaxEntryDistancePips(symbol: string): number {
+  return MAX_ENTRY_DISTANCE_PIPS[symbol] || 30;
+}
+
+function isBlockedPairDirection(symbol: string, direction: string): boolean {
+  const blocked = BLOCKED_PAIR_DIRECTIONS[symbol];
+  return blocked ? blocked.includes(direction) : false;
+}
+
+function isStrongPairDirection(symbol: string, direction: string): boolean {
+  const strong = STRONG_PAIR_DIRECTIONS[symbol];
+  return strong ? strong.includes(direction) : false;
+}
+
 async function resolveProfile(supabase: any, profileId?: string): Promise<StrategyProfile> {
   if (!profileId) return DEFAULT_PROFILE;
 
@@ -649,9 +692,12 @@ function calculateCRTConfidence(
   htfBias: HTFBias,
   h4Sweep: H4Sweep,
   m15Entry: M15Entry,
-  dailySR: { support: number[]; resistance: number[] }
+  dailySR: { support: number[]; resistance: number[] },
+  symbol: string,
+  signalType: string,
+  entryDistancePips: number,
 ): number {
-  // Conservative 50-58 model aligned with strategy engine
+  // Recalibrated confidence model based on 445-signal analysis
   let confidence = 50; // Base — CRT prerequisites (H4 sweep + M15 BOS) already met
 
   // HTF rejection quality: weekly is stronger than daily
@@ -664,9 +710,19 @@ function calculateCRTConfidence(
   // H4 sweep confirmed (always true here, modest bonus)
   confidence += 2;
 
-  // M15 Inducement found — additional confluence
+  // M15 Inducement — strongest win-rate predictor (+10)
   if (m15Entry.hasInducement) {
-    confidence += 2;
+    confidence += 10;
+  }
+
+  // Strong pair+direction combo bonus (+5)
+  if (isStrongPairDirection(symbol, signalType)) {
+    confidence += 5;
+  }
+
+  // Weak/blocked pair penalty (-10) — shouldn't reach here but safety net
+  if (isBlockedPairDirection(symbol, signalType)) {
+    confidence -= 10;
   }
 
   // Rejection at a key S/R level
@@ -676,8 +732,14 @@ function calculateCRTConfidence(
     confidence += 2;
   }
 
-  // Hard cap at 58 per documented confidence model
-  return Math.min(58, Math.max(50, confidence));
+  // Entry distance penalty: penalize entries far from current price
+  const maxPips = getMaxEntryDistancePips(symbol);
+  if (entryDistancePips > maxPips * 0.7) {
+    confidence -= 3; // Getting close to max distance
+  }
+
+  // Hard cap at 70 (raised from 58 to accommodate inducement bonus)
+  return Math.min(70, Math.max(50, confidence));
 }
 
 // =====================================================================
@@ -755,32 +817,54 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
 
   // ---- Signal Construction ----
   const signalType: 'BUY' | 'SELL' = htfBias.bias === 'BULLISH' ? 'BUY' : 'SELL';
-  const confidence = calculateCRTConfidence(htfBias, h4Sweep, m15Entry, dailySR);
+
+  // ---- NEW: Pair+Direction Blocklist Check ----
+  if (isBlockedPairDirection(symbol, signalType)) {
+    console.log(`[${symbol}] BLOCKED: ${symbol} ${signalType} is on the underperforming pair blocklist — skipping`);
+    return null;
+  }
+
+  // ---- NEW: Require Inducement Confirmation ----
+  if (!m15Entry.hasInducement) {
+    console.log(`[${symbol}] SKIPPED: No M15 Inducement detected — signals without inducement have 61.4% vs 78.4% win rate`);
+    return null;
+  }
+
+  // ---- NEW: Entry Distance Check ----
+  const currentPrice = m15Candles[m15Candles.length - 1].close;
+  const pipValue = getPipValue(symbol);
+  const entryDistancePips = Math.abs(currentPrice - m15Entry.entryPrice) / pipValue;
+  const maxDistPips = getMaxEntryDistancePips(symbol);
+  if (entryDistancePips > maxDistPips) {
+    console.log(`[${symbol}] SKIPPED: Entry too far from price (${entryDistancePips.toFixed(1)} pips > max ${maxDistPips} pips)`);
+    return null;
+  }
+
+  const confidence = calculateCRTConfidence(htfBias, h4Sweep, m15Entry, dailySR, symbol, signalType, entryDistancePips);
 
   // TP = opposite side of H4 range
   const takeProfit1 = signalType === 'SELL' ? h4Sweep.h4RangeLow : h4Sweep.h4RangeHigh;
 
   // Build reasoning string for Telegram
-  const currentPrice = m15Candles[m15Candles.length - 1].close;
   const reasoning =
     `${signalType} opportunity detected on ${symbol} with ${confidence}% confidence.\n\n` +
     `Bias: ${htfBias.bias} (${htfBias.rejectionTimeframe} resistance rejection at ${htfBias.rejectionLevel.toFixed(5)})\n` +
     `Setup: H4 Candle Range Sweep Confirmed (H4 ${signalType === 'SELL' ? 'High' : 'Low'} ${signalType === 'SELL' ? h4Sweep.h4RangeHigh.toFixed(5) : h4Sweep.h4RangeLow.toFixed(5)} swept)\n` +
-    `Entry Model: MSNR Model 1 (BOS + ${m15Entry.hasInducement ? 'Inducement' : 'No Inducement'})\n\n` +
+    `Entry Model: MSNR Model 1 (BOS + Inducement)\n\n` +
     `H4 Range: ${h4Sweep.h4RangeLow.toFixed(5)} - ${h4Sweep.h4RangeHigh.toFixed(5)}\n` +
     `M15 BOS at: ${m15Entry.bosLevel.toFixed(5)}\n` +
-    (m15Entry.inducementLevel ? `Inducement: ${m15Entry.inducementLevel.toFixed(5)}\n` : '') +
+    `Inducement: ${m15Entry.inducementLevel!.toFixed(5)}\n` +
+    `Entry Distance: ${entryDistancePips.toFixed(1)} pips\n` +
     `Current Price: ${currentPrice.toFixed(5)}`;
 
   const patternsDetected = [
     `${htfBias.rejectionTimeframe} ${htfBias.bias} Rejection`,
     'H4 CRT Sweep',
     'M15 BOS',
-    ...(m15Entry.hasInducement ? ['M15 Inducement'] : []),
+    'M15 Inducement',
   ];
 
   // Add 5-pip buffer to SL beyond the M15 sweep wick for breathing room
-  const pipValue = getPipValue(symbol);
   const slBuffer = 5 * pipValue;
   const structuralSL = signalType === 'SELL' 
     ? m15Entry.stopLoss + slBuffer   // Above the wick for SELL
