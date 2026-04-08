@@ -202,7 +202,7 @@ async function ensureTimeframeData(supabase: any, symbol: string, timeframe: str
         "Content-Type": "application/json",
         "Authorization": `Bearer ${supabaseAnonKey}`,
       },
-      body: JSON.stringify({ symbol, timeframe, outputsize: 200 }),
+      body: JSON.stringify({ symbol, timeframe, outputsize: timeframe === '1d' ? 60 : 150 }),
     });
     const result = await resp.json().catch(() => ({}));
     console.log(`[${symbol}] ensureTimeframeData(${timeframe}): success=${result?.success}, source=${result?.meta?.source || 'api'}`);
@@ -704,6 +704,8 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
   await ensureTimeframeData(supabase, symbol, profile.htf);
   await ensureTimeframeData(supabase, symbol, profile.trigger_tf);
   await ensureTimeframeData(supabase, symbol, profile.entry_tf);
+  // Also cache 1h data for the dashboard price display
+  await ensureTimeframeData(supabase, symbol, '1h');
 
   // Read cached candles
   const [dailyCandles, h4Candles, m15Candles] = await Promise.all([

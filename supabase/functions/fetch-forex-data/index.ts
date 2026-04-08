@@ -85,7 +85,7 @@ function defaultOutputsizeFor(timeframe: string): number {
     "30min": 150,
     "1h": 200,
     "4h": 200,
-    "1d": 200,
+    "1d": 60,
   };
   return defaults[timeframe] ?? 200;
 }

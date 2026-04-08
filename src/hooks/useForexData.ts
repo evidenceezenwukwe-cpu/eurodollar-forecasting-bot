@@ -44,15 +44,28 @@ export function useForexData(timeframe: Timeframe = '1h', symbol: string = 'EUR/
       const message = err instanceof Error ? err.message : 'Failed to fetch data';
 
       // Fallback: load cached candles directly from the backend cache table.
-      const { data: cachedRows, error: cacheError } = await supabase
-        .from('price_history')
-        .select('timestamp, open, high, low, close, volume')
-        .eq('symbol', symbol)
-        .eq('timeframe', timeframe)
-        .order('timestamp', { ascending: true })
-        .limit(300);
+      // Try the requested timeframe first, then fall back to 4h and 15min.
+      const fallbackTimeframes = [timeframe, '4h', '15min'].filter((v, i, a) => a.indexOf(v) === i);
+      let cachedRows: any[] | null = null;
+      let usedTimeframe: string = timeframe;
 
-      if (!cacheError && cachedRows && cachedRows.length > 0) {
+      for (const tf of fallbackTimeframes) {
+        const { data: rows, error: cacheError } = await supabase
+          .from('price_history')
+          .select('timestamp, open, high, low, close, volume')
+          .eq('symbol', symbol)
+          .eq('timeframe', tf)
+          .order('timestamp', { ascending: true })
+          .limit(300);
+
+        if (!cacheError && rows && rows.length > 0) {
+          cachedRows = rows;
+          usedTimeframe = tf;
+          break;
+        }
+      }
+
+      if (cachedRows && cachedRows.length > 0) {
         const candles = cachedRows.map((row) => ({
           timestamp: row.timestamp,
           open: Number(row.open),
@@ -66,7 +79,7 @@ export function useForexData(timeframe: Timeframe = '1h', symbol: string = 'EUR/
           symbol,
           currentPrice: candles[candles.length - 1]?.close ?? 0,
           candles,
-          meta: { source: 'cache_fallback', warning: message },
+          meta: { source: 'cache_fallback', timeframe: usedTimeframe, warning: message },
         });
         setLastUpdated(new Date());
         setError(`Using cached data: ${message}`);

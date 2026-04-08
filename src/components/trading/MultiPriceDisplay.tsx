@@ -34,7 +34,7 @@ export function MultiPriceDisplay({
           .from('price_history')
           .select('close, timestamp')
           .eq('symbol', pair.symbol)
-          .eq('timeframe', '1h')
+          .eq('timeframe', '15min')
           .order('timestamp', { ascending: false })
           .limit(2);
 
