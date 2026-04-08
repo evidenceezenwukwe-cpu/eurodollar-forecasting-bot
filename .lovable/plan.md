@@ -1,42 +1,57 @@
 
 
-## Fix: No Prices Displayed + No Signals for Days
+## Clean Slate + System Improvements
 
-### Root Causes Identified
+### Step 1: Clear All AI Learnings
+- Delete all 162 rows from `prediction_learnings` table using the insert/update tool
+- This gives the AI a fresh start without legacy bias
 
-**Problem 1 — No prices on dashboard**: The `MultiPriceDisplay` component queries `price_history` for `timeframe = '1h'`, but there is **zero `1h` data** in the database. The background scanner only caches `1d`, `4h`, and `15min` data. When the user's browser calls `useForexData('1h')`, all API keys are exhausted so it can't fetch live data either, and the cache fallback finds nothing for `1h`.
+### Step 2: Require Inducement Confirmation
+**File:** `supabase/functions/scan-opportunities/index.ts`
 
-**Problem 2 — No signals since April 3**: The scanner requires daily (`1d`) candles for CRT analysis. Logs show every pair has `Daily=0` candles cached because `ensureTimeframeData(1d)` fails — all 27 API keys are exhausted. Without daily data, the scanner skips every pair ("Insufficient data for CRT analysis").
+The data is clear: signals with M15 Inducement have a 78.4% win rate vs 61.4% without. Change the entry confirmation logic to **require** at least one Inducement tap (not just BOS alone) before generating a signal. Signals that only have BOS without Inducement should be skipped or given significantly lower confidence that falls below the threshold.
 
-**Problem 3 — Why all 27 keys are exhausted**: Each scan cycle calls `fetch-forex-data` for 3 timeframes × 12 pairs = 36 API calls, each requesting `outputsize=200` (200 credits per call). At ~7,200 credits per scan and scans running frequently, all 21,600 daily credits are burned quickly. The `1d` timeframe doesn't need 200 candles — 60 is plenty.
+### Step 3: Disable Underperforming Pair/Direction Combos
+**File:** `supabase/functions/scan-opportunities/index.ts`
 
-### Plan
+Add a blocklist for pair+direction combos with sub-50% win rates:
+- XAU/USD BUY (46.2%)
+- EUR/GBP SELL (40.0%)
+- USD/CHF BUY (37.5%)
+- AUD/JPY BUY (40.0%)
+- EUR/JPY SELL (40.0%)
 
-**1. Fix `MultiPriceDisplay` to use available data** (`src/components/trading/MultiPriceDisplay.tsx`)
-- Change the query from `timeframe = '1h'` to `timeframe = '15min'` (which is always cached by the scanner)
-- This immediately fixes the empty price ticker
+These combos should be skipped during scanning. This can be a simple config map checked before signal generation.
 
-**2. Fix `useForexData` cache fallback to try multiple timeframes** (`src/hooks/useForexData.ts`)
-- In the catch block's cache fallback, if no data is found for the requested timeframe (e.g. `1h`), also try `4h` and `15min` before giving up
-- This ensures the chart always shows something even when `1h` isn't cached
+### Step 4: Tighten Entry Price Distance
+**File:** `supabase/functions/scan-opportunities/index.ts`
 
-**3. Reduce daily candle outputsize to conserve credits** (`supabase/functions/scan-opportunities/index.ts`)
-- When calling `ensureTimeframeData` for `1d`, pass a smaller outputsize (60 instead of 200) — daily candles don't need 200 bars
-- This saves ~140 credits per pair per scan for the daily timeframe alone
+Reduce the maximum allowed distance between current price and entry price. The 25.8% expiration rate suggests entries are often set at levels the market doesn't reach within the signal's lifetime. Tightening this (e.g., max 30 pips for majors, 50 for JPY pairs, 200 for XAU) will reduce expired signals.
 
-**4. Add `1h` to the scanner's background fetch cycle** (`supabase/functions/scan-opportunities/index.ts`)
-- After ensuring HTF/trigger/entry data, also ensure `1h` data is cached so the dashboard has it available
-- Use a small outputsize (100) for `1h` to limit credit usage
+### Step 5: Recalibrate Confidence Scoring
+**File:** `supabase/functions/scan-opportunities/index.ts`
 
-**5. Lower default outputsize for `1d` in fetch-forex-data** (`supabase/functions/fetch-forex-data/index.ts`)
-- Change `defaultOutputsizeFor('1d')` from 200 to 60 — 200 daily candles is excessive and wastes credits
+Update the confidence model to weight factors that actually correlate with wins:
+- **Inducement present:** +10 (up from current bonus)
+- **Strong pair/direction combo** (EUR/USD BUY, USD/JPY SELL, GBP/USD SELL): +5
+- **Weak pair/direction combo:** -10 (should push below threshold)
+- **Entry distance:** penalize signals where entry is far from current price
 
-### Files to Modify
+### Step 6: Redeploy Scanner
+Deploy the updated `scan-opportunities` edge function with all changes.
 
+### Summary of Expected Impact
+
+| Metric | Current | Expected |
+|--------|---------|----------|
+| Win Rate | 63.3% | ~72-75% |
+| Expiration Rate | 25.8% | ~12-15% |
+| Signal Volume | ~15/day | ~8-10/day (higher quality) |
+| Inducement Signals | 11% of total | 100% of total |
+
+### Files Modified
 | File | Change |
 |------|--------|
-| `src/components/trading/MultiPriceDisplay.tsx` | Query `15min` instead of `1h` |
-| `src/hooks/useForexData.ts` | Fallback cache reads try `4h`, `15min` if requested TF empty |
-| `supabase/functions/scan-opportunities/index.ts` | Add `1h` caching; pass smaller outputsize for `1d` |
-| `supabase/functions/fetch-forex-data/index.ts` | Reduce `1d` default outputsize from 200 to 60 |
+| `prediction_learnings` table | Clear all 162 rows |
+| `scan-opportunities/index.ts` | Require inducement, add pair blocklist, tighten entries, recalibrate confidence |
 
