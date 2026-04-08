@@ -26,6 +26,49 @@ const DEFAULT_PROFILE: StrategyProfile = {
   settings: {},
 };
 
+// =====================================================================
+// Pair+Direction Blocklist — sub-50% win rate combos disabled
+// =====================================================================
+const BLOCKED_PAIR_DIRECTIONS: Record<string, string[]> = {
+  'XAU/USD': ['BUY'],
+  'EUR/GBP': ['SELL'],
+  'USD/CHF': ['BUY'],
+  'AUD/JPY': ['BUY'],
+  'EUR/JPY': ['SELL'],
+};
+
+// Strong pair+direction combos for confidence bonus
+const STRONG_PAIR_DIRECTIONS: Record<string, string[]> = {
+  'EUR/USD': ['BUY'],
+  'USD/JPY': ['SELL'],
+  'GBP/USD': ['SELL'],
+  'USD/CAD': ['SELL'],
+};
+
+// Max entry distance in pips per pair type
+const MAX_ENTRY_DISTANCE_PIPS: Record<string, number> = {
+  'XAU/USD': 200,
+  'USD/JPY': 50,
+  'EUR/JPY': 50,
+  'GBP/JPY': 50,
+  'AUD/JPY': 50,
+  // All other pairs default to 30
+};
+
+function getMaxEntryDistancePips(symbol: string): number {
+  return MAX_ENTRY_DISTANCE_PIPS[symbol] || 30;
+}
+
+function isBlockedPairDirection(symbol: string, direction: string): boolean {
+  const blocked = BLOCKED_PAIR_DIRECTIONS[symbol];
+  return blocked ? blocked.includes(direction) : false;
+}
+
+function isStrongPairDirection(symbol: string, direction: string): boolean {
+  const strong = STRONG_PAIR_DIRECTIONS[symbol];
+  return strong ? strong.includes(direction) : false;
+}
+
 async function resolveProfile(supabase: any, profileId?: string): Promise<StrategyProfile> {
   if (!profileId) return DEFAULT_PROFILE;
 
