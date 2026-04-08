@@ -692,9 +692,12 @@ function calculateCRTConfidence(
   htfBias: HTFBias,
   h4Sweep: H4Sweep,
   m15Entry: M15Entry,
-  dailySR: { support: number[]; resistance: number[] }
+  dailySR: { support: number[]; resistance: number[] },
+  symbol: string,
+  signalType: string,
+  entryDistancePips: number,
 ): number {
-  // Conservative 50-58 model aligned with strategy engine
+  // Recalibrated confidence model based on 445-signal analysis
   let confidence = 50; // Base — CRT prerequisites (H4 sweep + M15 BOS) already met
 
   // HTF rejection quality: weekly is stronger than daily
@@ -707,9 +710,19 @@ function calculateCRTConfidence(
   // H4 sweep confirmed (always true here, modest bonus)
   confidence += 2;
 
-  // M15 Inducement found — additional confluence
+  // M15 Inducement — strongest win-rate predictor (+10)
   if (m15Entry.hasInducement) {
-    confidence += 2;
+    confidence += 10;
+  }
+
+  // Strong pair+direction combo bonus (+5)
+  if (isStrongPairDirection(symbol, signalType)) {
+    confidence += 5;
+  }
+
+  // Weak/blocked pair penalty (-10) — shouldn't reach here but safety net
+  if (isBlockedPairDirection(symbol, signalType)) {
+    confidence -= 10;
   }
 
   // Rejection at a key S/R level
@@ -719,8 +732,14 @@ function calculateCRTConfidence(
     confidence += 2;
   }
 
-  // Hard cap at 58 per documented confidence model
-  return Math.min(58, Math.max(50, confidence));
+  // Entry distance penalty: penalize entries far from current price
+  const maxPips = getMaxEntryDistancePips(symbol);
+  if (entryDistancePips > maxPips * 0.7) {
+    confidence -= 3; // Getting close to max distance
+  }
+
+  // Hard cap at 70 (raised from 58 to accommodate inducement bonus)
+  return Math.min(70, Math.max(50, confidence));
 }
 
 // =====================================================================
