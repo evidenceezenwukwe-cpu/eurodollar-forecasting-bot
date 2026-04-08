@@ -47,7 +47,7 @@ export function useForexData(timeframe: Timeframe = '1h', symbol: string = 'EUR/
       // Try the requested timeframe first, then fall back to 4h and 15min.
       const fallbackTimeframes = [timeframe, '4h', '15min'].filter((v, i, a) => a.indexOf(v) === i);
       let cachedRows: any[] | null = null;
-      let usedTimeframe = timeframe;
+      let usedTimeframe: string = timeframe;
 
       for (const tf of fallbackTimeframes) {
         const { data: rows, error: cacheError } = await supabase
