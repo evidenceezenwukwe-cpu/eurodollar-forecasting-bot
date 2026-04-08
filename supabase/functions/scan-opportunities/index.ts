@@ -846,26 +846,25 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
   const takeProfit1 = signalType === 'SELL' ? h4Sweep.h4RangeLow : h4Sweep.h4RangeHigh;
 
   // Build reasoning string for Telegram
-  const currentPrice = m15Candles[m15Candles.length - 1].close;
   const reasoning =
     `${signalType} opportunity detected on ${symbol} with ${confidence}% confidence.\n\n` +
     `Bias: ${htfBias.bias} (${htfBias.rejectionTimeframe} resistance rejection at ${htfBias.rejectionLevel.toFixed(5)})\n` +
     `Setup: H4 Candle Range Sweep Confirmed (H4 ${signalType === 'SELL' ? 'High' : 'Low'} ${signalType === 'SELL' ? h4Sweep.h4RangeHigh.toFixed(5) : h4Sweep.h4RangeLow.toFixed(5)} swept)\n` +
-    `Entry Model: MSNR Model 1 (BOS + ${m15Entry.hasInducement ? 'Inducement' : 'No Inducement'})\n\n` +
+    `Entry Model: MSNR Model 1 (BOS + Inducement)\n\n` +
     `H4 Range: ${h4Sweep.h4RangeLow.toFixed(5)} - ${h4Sweep.h4RangeHigh.toFixed(5)}\n` +
     `M15 BOS at: ${m15Entry.bosLevel.toFixed(5)}\n` +
-    (m15Entry.inducementLevel ? `Inducement: ${m15Entry.inducementLevel.toFixed(5)}\n` : '') +
+    `Inducement: ${m15Entry.inducementLevel!.toFixed(5)}\n` +
+    `Entry Distance: ${entryDistancePips.toFixed(1)} pips\n` +
     `Current Price: ${currentPrice.toFixed(5)}`;
 
   const patternsDetected = [
     `${htfBias.rejectionTimeframe} ${htfBias.bias} Rejection`,
     'H4 CRT Sweep',
     'M15 BOS',
-    ...(m15Entry.hasInducement ? ['M15 Inducement'] : []),
+    'M15 Inducement',
   ];
 
   // Add 5-pip buffer to SL beyond the M15 sweep wick for breathing room
-  const pipValue = getPipValue(symbol);
   const slBuffer = 5 * pipValue;
   const structuralSL = signalType === 'SELL' 
     ? m15Entry.stopLoss + slBuffer   // Above the wick for SELL
