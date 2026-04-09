@@ -797,11 +797,18 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
   await ensureTimeframeData(supabase, symbol, '1h');
 
   // Read cached candles
-  const [dailyCandles, h4Candles, m15Candles] = await Promise.all([
+  let [dailyCandles, h4Candles, m15Candles] = await Promise.all([
     readCandles(supabase, symbol, profile.htf, 200),
     readCandles(supabase, symbol, profile.trigger_tf, 200),
     readCandles(supabase, symbol, profile.entry_tf, 200),
   ]);
+
+  // Fallback: if no daily candles available, synthesize from 4h data
+  if (dailyCandles.length < 10 && h4Candles.length >= 20 && profile.htf === '1d') {
+    console.log(`[${symbol}] No daily data — synthesizing daily candles from ${h4Candles.length} x 4h candles`);
+    dailyCandles = aggregate4hToDaily(h4Candles);
+    console.log(`[${symbol}] Synthesized ${dailyCandles.length} daily candles from 4h data`);
+  }
 
   console.log(`[${symbol}] Data: Daily=${dailyCandles.length}, H4=${h4Candles.length}, M15=${m15Candles.length}`);
 
