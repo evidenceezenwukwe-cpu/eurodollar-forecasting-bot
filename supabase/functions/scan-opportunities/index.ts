@@ -282,6 +282,34 @@ async function readCandles(supabase: any, symbol: string, timeframe: string, lim
 }
 
 // =====================================================================
+// Aggregate 4h candles into synthetic daily candles
+// =====================================================================
+function aggregate4hToDaily(h4Candles: Candle[]): Candle[] {
+  if (h4Candles.length === 0) return [];
+
+  const dayMap = new Map<string, Candle[]>();
+  for (const c of h4Candles) {
+    const key = c.timestamp.slice(0, 10); // YYYY-MM-DD
+    if (!dayMap.has(key)) dayMap.set(key, []);
+    dayMap.get(key)!.push(c);
+  }
+
+  const daily: Candle[] = [];
+  for (const [, candles] of dayMap) {
+    if (candles.length < 2) continue; // skip incomplete days
+    daily.push({
+      timestamp: candles[0].timestamp,
+      open: candles[0].open,
+      high: Math.max(...candles.map(c => c.high)),
+      low: Math.min(...candles.map(c => c.low)),
+      close: candles[candles.length - 1].close,
+    });
+  }
+
+  return daily.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+
+// =====================================================================
 // Aggregate daily candles into weekly candles
 // =====================================================================
 function aggregateWeeklyCandles(dailyCandles: Candle[]): Candle[] {
@@ -291,7 +319,6 @@ function aggregateWeeklyCandles(dailyCandles: Candle[]): Candle[] {
 
   for (const c of dailyCandles) {
     const d = new Date(c.timestamp);
-    // ISO week key: year-weekNumber
     const jan1 = new Date(d.getFullYear(), 0, 1);
     const dayIndex = Math.floor((d.getTime() - jan1.getTime()) / 86400000);
     const weekNum = Math.ceil((dayIndex + jan1.getDay() + 1) / 7);
