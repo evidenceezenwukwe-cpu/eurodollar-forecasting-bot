@@ -47,12 +47,12 @@ const STRONG_PAIR_DIRECTIONS: Record<string, string[]> = {
 
 // Max entry distance in pips per pair type
 const MAX_ENTRY_DISTANCE_PIPS: Record<string, number> = {
-  'XAU/USD': 200,
-  'USD/JPY': 50,
-  'EUR/JPY': 50,
-  'GBP/JPY': 50,
-  'AUD/JPY': 50,
-  // All other pairs default to 30
+  'XAU/USD': 300,
+  'USD/JPY': 80,
+  'EUR/JPY': 80,
+  'GBP/JPY': 80,
+  'AUD/JPY': 80,
+  // All other pairs default to 50
 };
 
 function getMaxEntryDistancePips(symbol: string): number {
