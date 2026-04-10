@@ -101,10 +101,11 @@ serve(async (req) => {
     );
   } catch (error: any) {
     console.error('Error in verify-subscription:', error);
+    const isAuthError = error.message === 'Unauthorized';
     return new Response(
-      JSON.stringify({ error: error.message, hasAccess: false }),
+      JSON.stringify({ error: isAuthError ? 'Unauthorized' : 'Failed to verify subscription', hasAccess: false }),
       {
-        status: error.message === 'Unauthorized' ? 401 : 400,
+        status: isAuthError ? 401 : 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
     );

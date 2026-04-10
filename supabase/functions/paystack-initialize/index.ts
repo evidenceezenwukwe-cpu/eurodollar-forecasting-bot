@@ -37,20 +37,51 @@ serve(async (req) => {
 
   try {
     if (!PAYSTACK_SECRET_KEY) {
-      throw new Error('Paystack secret key not configured');
+      return new Response(
+        JSON.stringify({ error: 'Payment service is not configured' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    const { plan, email, userId } = await req.json();
-
-    console.log(`Initializing payment for plan: ${plan}, email: ${email}, userId: ${userId}`);
-
-    if (!plan || !email || !userId) {
-      throw new Error('Missing required fields: plan, email, userId');
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return new Response(
+        JSON.stringify({ error: 'Invalid request body' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
+
+    const { plan, email, userId } = body;
+
+    // Validate inputs
+    const validPlans = ['retail', 'funded', 'lifetime'];
+    if (!plan || !validPlans.includes(plan)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid plan selected' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    if (!email || typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid email address' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    if (!userId || typeof userId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid user ID' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log(`Initializing payment for plan: ${plan}`);
 
     const planConfig = PLANS[plan as keyof typeof PLANS];
     if (!planConfig) {
-      throw new Error(`Invalid plan: ${plan}`);
+      return new Response(
+        JSON.stringify({ error: 'Invalid plan selected' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     // Generate unique reference
@@ -119,9 +150,9 @@ serve(async (req) => {
   } catch (error: any) {
     console.error('Error in paystack-initialize:', error);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: 'An error occurred processing your payment. Please try again.' }),
       {
-        status: 400,
+        status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
     );

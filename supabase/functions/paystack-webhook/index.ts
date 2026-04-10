@@ -181,6 +181,6 @@ serve(async (req) => {
     return new Response('OK', { status: 200 });
   } catch (error: any) {
     console.error('Webhook error:', error);
-    return new Response(error.message, { status: 500 });
+    return new Response('Internal server error', { status: 500 });
   }
 });
