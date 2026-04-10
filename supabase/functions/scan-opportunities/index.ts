@@ -860,11 +860,7 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
     return null;
   }
 
-  // ---- NEW: Require Inducement Confirmation ----
-  if (!m15Entry.hasInducement) {
-    console.log(`[${symbol}] SKIPPED: No M15 Inducement detected — signals without inducement have 61.4% vs 78.4% win rate`);
-    return null;
-  }
+  // Inducement is now preferred, not mandatory — confidence penalty applied in scoring
 
   // ---- NEW: Entry Distance Check ----
   const currentPrice = m15Candles[m15Candles.length - 1].close;
