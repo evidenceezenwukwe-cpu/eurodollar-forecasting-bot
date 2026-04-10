@@ -1,57 +1,48 @@
 
 
-## Clean Slate + System Improvements
+## Fix: Zero Signals Generated Since April 3
 
-### Step 1: Clear All AI Learnings
-- Delete all 162 rows from `prediction_learnings` table using the insert/update tool
-- This gives the AI a fresh start without legacy bias
+### Root Cause
 
-### Step 2: Require Inducement Confirmation
-**File:** `supabase/functions/scan-opportunities/index.ts`
+The scanner runs every 5 minutes and works correctly, but the combination of three strict filters added on April 3 has been **too aggressive** — zero signals have passed all checks in 7 days:
 
-The data is clear: signals with M15 Inducement have a 78.4% win rate vs 61.4% without. Change the entry confirmation logic to **require** at least one Inducement tap (not just BOS alone) before generating a signal. Signals that only have BOS without Inducement should be skipped or given significantly lower confidence that falls below the threshold.
+1. **Mandatory Inducement** — requires M15 inducement tap (most setups don't have one)
+2. **Pair Blocklist** — blocks 5 pair/direction combos entirely
+3. **Tight Entry Distance** — 30 pips for majors, 50 for JPY, 200 for XAU
 
-### Step 3: Disable Underperforming Pair/Direction Combos
-**File:** `supabase/functions/scan-opportunities/index.ts`
+Together these filters eliminate every setup the market produces. Telegram notifications are fine — they just never get triggered because no signals are created.
 
-Add a blocklist for pair+direction combos with sub-50% win rates:
-- XAU/USD BUY (46.2%)
-- EUR/GBP SELL (40.0%)
-- USD/CHF BUY (37.5%)
-- AUD/JPY BUY (40.0%)
-- EUR/JPY SELL (40.0%)
+### Fix Strategy
 
-These combos should be skipped during scanning. This can be a simple config map checked before signal generation.
+Relax the filters to be selective but not paralyzing:
 
-### Step 4: Tighten Entry Price Distance
-**File:** `supabase/functions/scan-opportunities/index.ts`
+**File: `supabase/functions/scan-opportunities/index.ts`**
 
-Reduce the maximum allowed distance between current price and entry price. The 25.8% expiration rate suggests entries are often set at levels the market doesn't reach within the signal's lifetime. Tightening this (e.g., max 30 pips for majors, 50 for JPY pairs, 200 for XAU) will reduce expired signals.
+1. **Make Inducement preferred, not mandatory** — Instead of skipping signals without inducement, apply a confidence penalty (-8). Signals with inducement still get the +10 bonus. This means inducement signals score ~18 points higher, but non-inducement setups can still fire if everything else aligns.
 
-### Step 5: Recalibrate Confidence Scoring
-**File:** `supabase/functions/scan-opportunities/index.ts`
+2. **Raise the minimum confidence threshold to 58** — Currently there's no minimum threshold (base is 50). Adding a 58 threshold means only non-inducement signals with multiple other confirmations (strong pair, near S/R, tight entry) can pass. This replaces the hard inducement gate with a quality gate.
 
-Update the confidence model to weight factors that actually correlate with wins:
-- **Inducement present:** +10 (up from current bonus)
-- **Strong pair/direction combo** (EUR/USD BUY, USD/JPY SELL, GBP/USD SELL): +5
-- **Weak pair/direction combo:** -10 (should push below threshold)
-- **Entry distance:** penalize signals where entry is far from current price
+3. **Widen entry distance limits** — Increase from 30/50/200 to 50/80/300 pips. The current limits are too tight for normal market conditions.
 
-### Step 6: Redeploy Scanner
-Deploy the updated `scan-opportunities` edge function with all changes.
+4. **Keep the pair blocklist** — This is data-driven and reasonable. No change needed.
 
-### Summary of Expected Impact
+5. **Add scan logging** — Log which filter step rejected each pair so we can diagnose future droughts without guessing.
 
-| Metric | Current | Expected |
-|--------|---------|----------|
-| Win Rate | 63.3% | ~72-75% |
-| Expiration Rate | 25.8% | ~12-15% |
-| Signal Volume | ~15/day | ~8-10/day (higher quality) |
-| Inducement Signals | 11% of total | 100% of total |
+### Telegram Verification
+
+After signals start generating again, Telegram notifications will automatically resume (the code at line 1221-1259 is correct). No changes needed to `send-telegram-notification`.
+
+### Expected Impact
+
+| Metric | Current (7 days) | Expected |
+|--------|-------------------|----------|
+| Signals Generated | 0 | ~5-10/day |
+| Inducement Signals | 0 | ~30-40% of total (get higher confidence) |
+| Telegram Notifications | 0 | Same as signals generated |
+| Win Rate | N/A | ~68-72% (inducement signals still favored) |
 
 ### Files Modified
 | File | Change |
 |------|--------|
-| `prediction_learnings` table | Clear all 162 rows |
-| `scan-opportunities/index.ts` | Require inducement, add pair blocklist, tighten entries, recalibrate confidence |
+| `supabase/functions/scan-opportunities/index.ts` | Remove hard inducement gate, add confidence threshold of 58, widen entry distance, add filter logging |
 
