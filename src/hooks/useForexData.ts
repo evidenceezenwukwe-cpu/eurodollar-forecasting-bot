@@ -82,7 +82,8 @@ export function useForexData(timeframe: Timeframe = '1h', symbol: string = 'EUR/
           meta: { source: 'cache_fallback', timeframe: usedTimeframe, warning: message },
         });
         setLastUpdated(new Date());
-        setError(`Using cached data: ${message}`);
+        // Don't show error when we successfully loaded cached data
+        setError(null);
       } else {
         setError(message);
       }
