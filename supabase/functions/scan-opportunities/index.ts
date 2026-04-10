@@ -56,7 +56,7 @@ const MAX_ENTRY_DISTANCE_PIPS: Record<string, number> = {
 };
 
 function getMaxEntryDistancePips(symbol: string): number {
-  return MAX_ENTRY_DISTANCE_PIPS[symbol] || 30;
+  return MAX_ENTRY_DISTANCE_PIPS[symbol] || 50;
 }
 
 function isBlockedPairDirection(symbol: string, direction: string): boolean {
