@@ -737,9 +737,11 @@ function calculateCRTConfidence(
   // H4 sweep confirmed (always true here, modest bonus)
   confidence += 2;
 
-  // M15 Inducement — strongest win-rate predictor (+10)
+  // M15 Inducement — strongest win-rate predictor
   if (m15Entry.hasInducement) {
     confidence += 10;
+  } else {
+    confidence -= 8; // No inducement penalty — must compensate with other factors
   }
 
   // Strong pair+direction combo bonus (+5)
