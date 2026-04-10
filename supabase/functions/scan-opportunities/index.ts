@@ -874,18 +874,29 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
 
   const confidence = calculateCRTConfidence(htfBias, h4Sweep, m15Entry, dailySR, symbol, signalType, entryDistancePips);
 
+  // ---- Minimum Confidence Threshold ----
+  if (confidence < 58) {
+    console.log(`[${symbol}] SKIPPED: Confidence ${confidence} below minimum threshold of 58`);
+    return null;
+  }
+
   // TP = opposite side of H4 range
   const takeProfit1 = signalType === 'SELL' ? h4Sweep.h4RangeLow : h4Sweep.h4RangeHigh;
 
   // Build reasoning string for Telegram
+  const entryModel = m15Entry.hasInducement ? 'MSNR Model 1 (BOS + Inducement)' : 'MSNR Model 2 (BOS only)';
+  const inducementLine = m15Entry.hasInducement
+    ? `Inducement: ${m15Entry.inducementLevel!.toFixed(5)}\n`
+    : `Inducement: None (BOS-only entry)\n`;
+
   const reasoning =
     `${signalType} opportunity detected on ${symbol} with ${confidence}% confidence.\n\n` +
     `Bias: ${htfBias.bias} (${htfBias.rejectionTimeframe} resistance rejection at ${htfBias.rejectionLevel.toFixed(5)})\n` +
     `Setup: H4 Candle Range Sweep Confirmed (H4 ${signalType === 'SELL' ? 'High' : 'Low'} ${signalType === 'SELL' ? h4Sweep.h4RangeHigh.toFixed(5) : h4Sweep.h4RangeLow.toFixed(5)} swept)\n` +
-    `Entry Model: MSNR Model 1 (BOS + Inducement)\n\n` +
+    `Entry Model: ${entryModel}\n\n` +
     `H4 Range: ${h4Sweep.h4RangeLow.toFixed(5)} - ${h4Sweep.h4RangeHigh.toFixed(5)}\n` +
     `M15 BOS at: ${m15Entry.bosLevel.toFixed(5)}\n` +
-    `Inducement: ${m15Entry.inducementLevel!.toFixed(5)}\n` +
+    inducementLine +
     `Entry Distance: ${entryDistancePips.toFixed(1)} pips\n` +
     `Current Price: ${currentPrice.toFixed(5)}`;
 
@@ -893,7 +904,7 @@ async function analyzeCRT(supabase: any, symbol: string, profile: StrategyProfil
     `${htfBias.rejectionTimeframe} ${htfBias.bias} Rejection`,
     'H4 CRT Sweep',
     'M15 BOS',
-    'M15 Inducement',
+    ...(m15Entry.hasInducement ? ['M15 Inducement'] : []),
   ];
 
   // Add 5-pip buffer to SL beyond the M15 sweep wick for breathing room
