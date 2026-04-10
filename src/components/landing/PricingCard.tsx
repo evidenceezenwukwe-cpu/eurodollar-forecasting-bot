@@ -51,6 +51,10 @@ export const PricingCard = ({
       if (error) throw error;
 
       if (data?.authorization_url) {
+        const url = new URL(data.authorization_url);
+        if (!url.hostname.endsWith('paystack.co')) {
+          throw new Error('Invalid payment URL received');
+        }
         window.location.href = data.authorization_url;
       } else {
         throw new Error('Failed to get payment URL');
