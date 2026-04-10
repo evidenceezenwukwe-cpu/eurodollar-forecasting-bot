@@ -1113,6 +1113,7 @@ async function scanSymbol(
   const analysis = await analyzeCRT(supabase, symbol, profile);
 
   if (!analysis) {
+    console.log(`[${symbol}] FILTER SUMMARY: No setup found (check Step A/B/C/blocklist/distance/confidence logs above)`);
     return { success: true, message: `No CRT+MSNR setup for ${symbol}` };
   }
 
