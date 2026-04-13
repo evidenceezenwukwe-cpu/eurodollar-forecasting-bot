@@ -1117,7 +1117,7 @@ async function scanSymbol(
     return { success: true, message: `No CRT+MSNR setup for ${symbol}` };
   }
 
-  const currentPrice = analysis.entryPrice;
+  const analysisEntryPrice = analysis.entryPrice;
 
   // Check for conflicting active signals (opposite direction)
   const oppositeSignal = analysis.signal === 'BUY' ? 'SELL' : 'BUY';
