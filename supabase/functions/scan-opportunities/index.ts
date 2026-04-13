@@ -1222,7 +1222,7 @@ async function scanSymbol(
       signal_type: analysis.signal,
       confidence: analysis.confidence,
       entry_price: analysis.entryPrice,
-      current_price: currentPrice,
+      current_price: analysisEntryPrice,
       stop_loss: analysis.stopLoss,
       take_profit_1: analysis.takeProfit1,
       take_profit_2: analysis.takeProfit2,
