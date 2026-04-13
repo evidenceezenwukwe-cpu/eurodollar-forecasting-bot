@@ -1117,7 +1117,7 @@ async function scanSymbol(
     return { success: true, message: `No CRT+MSNR setup for ${symbol}` };
   }
 
-  const currentPrice = analysis.entryPrice;
+  const analysisEntryPrice = analysis.entryPrice;
 
   // Check for conflicting active signals (opposite direction)
   const oppositeSignal = analysis.signal === 'BUY' ? 'SELL' : 'BUY';
@@ -1157,23 +1157,39 @@ async function scanSymbol(
     };
   }
 
-  // Enhanced duplicate check - look at recent opportunities (4 hours)
+  // --- Exact-match dedup: 24-hour window ---
+  const { data: exactDupes } = await supabase
+    .from('trading_opportunities')
+    .select('id, entry_price')
+    .eq('symbol', symbol)
+    .eq('signal_type', analysis.signal)
+    .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+
+  if (exactDupes && exactDupes.length > 0) {
+    const hasExactMatch = exactDupes.some((opp: any) => opp.entry_price === analysis.entryPrice);
+    if (hasExactMatch) {
+      console.log(`[${symbol}] DEDUP: Exact same entry price ${analysis.entryPrice} already signalled in last 24h — skipping`);
+      return { success: true, message: `Exact duplicate ${analysis.signal} signal for ${symbol}` };
+    }
+  }
+
+  // --- Proximity dedup: 8-hour window, 15 pips ---
   const { data: recentOpps } = await supabase
     .from('trading_opportunities')
     .select('id, signal_type, entry_price, created_at, status')
     .eq('symbol', symbol)
     .eq('signal_type', analysis.signal)
-    .gte('created_at', new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString());
+    .gte('created_at', new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString());
 
   if (recentOpps && recentOpps.length > 0) {
     const pipValue = getPipValue(symbol);
     const tooClose = recentOpps.some((opp: any) => {
-      const pipsDiff = Math.abs(currentPrice - opp.entry_price) / pipValue;
+      const pipsDiff = Math.abs(analysisEntryPrice - opp.entry_price) / pipValue;
       return pipsDiff < 15;
     });
 
     if (tooClose) {
-      console.log(`[${symbol}] Similar opportunity exists within 15 pips — skipping`);
+      console.log(`[${symbol}] DEDUP: Similar opportunity exists within 15 pips in last 8h — skipping`);
       return { success: true, message: `Similar ${analysis.signal} opportunity exists for ${symbol}` };
     }
 
@@ -1206,7 +1222,7 @@ async function scanSymbol(
       signal_type: analysis.signal,
       confidence: analysis.confidence,
       entry_price: analysis.entryPrice,
-      current_price: currentPrice,
+      current_price: analysisEntryPrice,
       stop_loss: analysis.stopLoss,
       take_profit_1: analysis.takeProfit1,
       take_profit_2: analysis.takeProfit2,
